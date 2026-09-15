@@ -6,7 +6,7 @@ import plotly.graph_objects as ob
 # 페이지 기본 설정
 st.set_page_config(page_title="반도체 POR 밴드 시뮬레이터", layout="wide")
 
-EXCEL_FILE = 'sigmahunting_ver0.2.xlsx'
+EXCEL_FILE = 'sigmahunting.xlsx'
 
 # 종목 및 시트 매핑
 STOCKS = {
