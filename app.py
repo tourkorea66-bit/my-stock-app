@@ -28,7 +28,8 @@ STOCKS = {
     'SK하이닉스': ('SK하이닉스1', 'SK하이닉스2')
 }
 
-@st.cache_data(ttl=60)
+# @st.cache_resource 로 수정하여 객체 캐싱 문제 해결
+@st.cache_resource
 def load_excel_file(file_path):
     return pd.ExcelFile(file_path)
 
