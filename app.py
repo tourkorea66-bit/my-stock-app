@@ -80,7 +80,6 @@ updated_ops = {}
 
 for idx, yr in enumerate(years):
     with cols[idx]:
-        # 기본값 로드
         init_val = default_ops.get(yr, 0.0)
         val = st.number_input(
             f"{yr}년", 
@@ -91,7 +90,7 @@ for idx, yr in enumerate(years):
         )
         updated_ops[yr] = val
 
-# 3. 데이터 가공 및 안전한 매핑
+# 3. 데이터 가공 및 매핑
 valid_df = df2.copy()
 valid_df['종가'] = pd.to_numeric(valid_df['종가'], errors='coerce')
 valid_df = valid_df[valid_df['종가'].notnull() & (valid_df['종가'] > 0)].copy()
@@ -101,7 +100,7 @@ valid_df['연도'] = valid_df['날짜'].dt.year.astype(str)
 
 valid_df['시가총액'] = pd.to_numeric(valid_df['시가총액'], errors='coerce')
 
-# 영업이익 매핑 (문자열 연도와 정확히 일치)
+# 영업이익 매핑
 valid_df['수정_영업이익'] = valid_df['연도'].map(updated_ops)
 valid_df['수정_영업이익'] = pd.to_numeric(valid_df['수정_영업이익'], errors='coerce')
 
@@ -133,26 +132,53 @@ c1.metric("평균 POR (Mean)", f"{mean_val:.2f}")
 c2.metric("표준편차 (STDEV)", f"{std_val:.2f}")
 c3.metric("+2σ 밴드 상단", f"{(mean_val + std_val*2):.2f}")
 
-# 4. Plotly 차트 그리시
+# 4. Plotly 차트 디자인 (하얀색 라인 및 다크/라이트 모드 대응 고대비 설정)
 fig = go.Figure()
 
-# POR 선
-fig.add_trace(go.Scatter(x=valid_df['날짜'], y=valid_df['수정_POR'], mode='lines', name='POR (실시간 재계산)', line=dict(color='black', width=2)))
+# main POR 선을 두껍고 선명한 하얀색(White)으로 지정
+fig.add_trace(go.Scatter(
+    x=valid_df['날짜'], 
+    y=valid_df['수정_POR'], 
+    mode='lines', 
+    name='POR (실시간)', 
+    line=dict(color='#FFFFFF', width=2.5)
+))
 
-# 밴드 선들
-fig.add_trace(go.Scatter(x=valid_df['날짜'], y=valid_df['+2σ'], mode='lines', name='+2σ (상단 밴드)', line=dict(color='#dc3545', width=1.5, dash='dash')))
-fig.add_trace(go.Scatter(x=valid_df['날짜'], y=valid_df['+1σ'], mode='lines', name='+1σ', line=dict(color='#ffc107', width=1.5, dash='dot')))
-fig.add_trace(go.Scatter(x=valid_df['날짜'], y=valid_df['Mean'], mode='lines', name='Mean (평균)', line=dict(color='#28a745', width=2, dash='solid')))
-fig.add_trace(go.Scatter(x=valid_df['날짜'], y=valid_df['-1σ'], mode='lines', name='-1σ', line=dict(color='#17a2b8', width=1.5, dash='dot')))
-fig.add_trace(go.Scatter(x=valid_df['날짜'], y=valid_df['-2σ'], mode='lines', name='-2σ (하단 밴드)', line=dict(color='#6c757d', width=1.5, dash='dash')))
+# 밴드 라인들 색상 설정
+fig.add_trace(go.Scatter(x=valid_df['날짜'], y=valid_df['+2σ'], mode='lines', name='+2σ (상단)', line=dict(color='#FF5555', width=1.5, dash='dash')))
+fig.add_trace(go.Scatter(x=valid_df['날짜'], y=valid_df['+1σ'], mode='lines', name='+1σ', line=dict(color='#FFB86C', width=1.5, dash='dot')))
+fig.add_trace(go.Scatter(x=valid_df['날짜'], y=valid_df['Mean'], mode='lines', name='Mean (평균)', line=dict(color='#50FA7B', width=2, dash='solid')))
+fig.add_trace(go.Scatter(x=valid_df['날짜'], y=valid_df['-1σ'], mode='lines', name='-1σ', line=dict(color='#8BE9FD', width=1.5, dash='dot')))
+fig.add_trace(go.Scatter(x=valid_df['날짜'], y=valid_df['-2σ'], mode='lines', name='-2σ (하단)', line=dict(color='#BD93F9', width=1.5, dash='dash')))
 
+# 차트 전체 축/글씨/배경 고대비 설정
 fig.update_layout(
-    title=f"<b>{selected_stock} POR 밴드 시뮬레이션 차트</b>",
-    xaxis_title="날짜",
-    yaxis_title="POR",
+    title=dict(text=f"<b>{selected_stock} POR 밴드 시뮬레이션 차트</b>", font=dict(color='#FFFFFF', size=20)),
+    paper_bgcolor='#1E1E1E',
+    plot_bgcolor='#141414',
+    font=dict(color='#FFFFFF'),
+    xaxis=dict(
+        title="날짜",
+        showgrid=True,
+        gridcolor='#333333',
+        color='#FFFFFF'
+    ),
+    yaxis=dict(
+        title="POR",
+        showgrid=True,
+        gridcolor='#333333',
+        color='#FFFFFF'
+    ),
     hovermode="x unified",
     height=600,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    legend=dict(
+        orientation="h", 
+        yanchor="bottom", 
+        y=1.02, 
+        xanchor="right", 
+        x=1,
+        font=dict(color='#FFFFFF')
+    )
 )
 
 st.plotly_chart(fig, use_container_width=True)
