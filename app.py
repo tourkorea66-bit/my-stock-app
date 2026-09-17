@@ -7,34 +7,44 @@ from datetime import datetime, timedelta
 import os
 import json
 import requests
+import re
 
 # 페이지 기본 설정
-st.set_page_config(page_title="반도체 & KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
+st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
 
 JSON_FILE = 'custom_stocks.json'
-EXCEL_FILE = 'sigmahunting.xlsx'
 
 DEFAULT_STOCKS = {
     '반도체': {
-        'SK하이닉스': ['000660', 'SK하이닉스1'],
-        '티엘비': ['356860', '티엘비1'],
-        '엠케이전자': ['033160', '엠케이전자1'],
-        'ISC': ['095340', 'ISC1'],
-        '엘티씨': ['170920', '엘티씨1'],
-        '하나마이크론': ['067310', '하나마이크론1'],
-        '하나머티리얼즈': ['166090', '하나머티리얼즈1'],
-        '코미코': ['183300', '코미코1'],
-        '에프에스티': ['036810', '에프에스티1 ']
+        'SK하이닉스': '000660',
+        '티엘비': '356860',
+        '엠케이전자': '033160',
+        'ISC': '095340',
+        '엘티씨': '170920',
+        '하나마이크론': '067310',
+        '하나머티리얼즈': '166090',
+        '코미코': '183300',
+        '에프에스티': '036810'
     },
     '관심종목': {}
 }
 
-# --- JSON 및 엑셀 로드 ---
+# --- JSON 저장/로드 (엑셀 시트명 제거) ---
 def load_stocks_data():
     if os.path.exists(JSON_FILE):
         try:
             with open(JSON_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+                # 기존 [code, sheet] 형태 데이터를 code 문자열로 변환 (호환성 처리)
+                cleaned_data = {}
+                for cat, stocks in data.items():
+                    cleaned_data[cat] = {}
+                    for name, val in stocks.items():
+                        if isinstance(val, list):
+                            cleaned_data[cat][name] = val[0]
+                        else:
+                            cleaned_data[cat][name] = val
+                return cleaned_data
         except Exception:
             return DEFAULT_STOCKS.copy()
     return DEFAULT_STOCKS.copy()
@@ -46,14 +56,6 @@ def save_stocks_data(data):
 if 'stock_categories' not in st.session_state:
     st.session_state.stock_categories = load_stocks_data()
 
-@st.cache_resource
-def load_excel_file(file_path):
-    if os.path.exists(file_path):
-        return pd.ExcelFile(file_path)
-    return None
-
-xls = load_excel_file(EXCEL_FILE)
-
 # KRX 상장 종목 데이터
 @st.cache_data(ttl=86400)
 def get_krx_stock_list():
@@ -63,39 +65,47 @@ def get_krx_stock_list():
         if 'Stocks' in df_krx.columns:
             cols.append('Stocks')
         return df_krx[cols].dropna(subset=['Code', 'Name'])
-    except Exception as e:
+    except Exception:
         return pd.DataFrame(columns=['Code', 'Name', 'Stocks'])
 
 krx_df = get_krx_stock_list()
 
-# --- 과거 영업이익 로드 (엑셀 우선 ➔ Open API 백업) ---
-def get_historical_operating_profit_reliable(code, sheet_name):
+# --- 범용 영업이익 수집 함수 (API + Web Table) ---
+@st.cache_data(ttl=86400)
+def fetch_operating_profit(code):
     ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
     
-    # 1. 엑셀 파일 시트에서 직접 읽기 (가장 확실함)
-    if xls is not None and sheet_name is not None:
-        try:
-            df1 = pd.read_excel(xls, sheet_name=sheet_name)
-            if len(df1) >= 3:
-                row_yr = [str(x) for x in df1.iloc[1].tolist()]
-                row_op = df1.iloc[2].tolist()
-                
-                for yr_col, op_val in zip(row_yr, row_op):
-                    clean_yr = yr_col.replace('(E)', '').replace('.0', '').strip()
-                    if clean_yr in ops:
-                        try:
-                            ops[clean_yr] = float(op_val)
-                        except (ValueError, TypeError):
-                            pass
-        except Exception:
-            pass
+    # 1차 시도: 네이버 모바일 API (가장 빠르고 정확함)
+    try:
+        url = f"https://m.stock.naver.com/api/item/getCoInfoFnnrPrmList.naver?code={code}&fnnrType=A"
+        headers = {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)'}
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            if 'fnnrPrmList' in data:
+                for item in data['fnnrPrmList']:
+                    if item.get('accCd') == '0001000' or '영업이익' in item.get('accNm', ''):
+                        for col in item.get('fnnrPrmColList', []):
+                            yr_str = str(col.get('yyyymm', ''))[:4]
+                            if yr_str in ops:
+                                val_str = str(col.get('val', '0')).replace(',', '')
+                                try:
+                                    # 백만원 단위 -> 원 단위
+                                    ops[yr_str] = float(val_str) * 100_000_000.0
+                                except ValueError:
+                                    pass
+                        break
+    except Exception:
+        pass
 
-    # 2. 엑셀 데이터가 없을 경우 금융 Open API 타격
+    # 2차 시도: 1차 실패 시 네이버 PC 웹 주요재무정보 테이블 파싱
     if not any(ops.values()):
         try:
-            url = f"https://finance.naver.com/item/coinfo.naver?code={code}"
-            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
-            tables = pd.read_html(res.text, encoding='euc-kr')
+            url = f"https://finance.naver.com/item/main.naver?code={code}"
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            res = requests.get(url, headers=headers, timeout=5)
+            tables = pd.read_html(res.text)
+            
             for tbl in tables:
                 if any('영업이익' in str(cell) for cell in tbl.iloc[:, 0]):
                     row_idx = tbl[tbl.iloc[:, 0].astype(str).str.contains('영업이익')].index[0]
@@ -104,8 +114,9 @@ def get_historical_operating_profit_reliable(code, sheet_name):
                         val = tbl.iloc[row_idx, col_idx]
                         for yr in ops.keys():
                             if yr in col_hdr and pd.notnull(val):
+                                clean_v = re.sub(r'[^0-9.-]', '', str(val))
                                 try:
-                                    ops[yr] = float(str(val).replace(',', '')) * 100_000_000.0
+                                    ops[yr] = float(clean_v) * 100_000_000.0
                                 except ValueError:
                                     pass
                     break
@@ -139,9 +150,9 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 
                 exists = any(name in stocks for stocks in st.session_state.stock_categories.values())
                 if not exists:
-                    st.session_state.stock_categories[target_cat][name] = [code, None]
+                    st.session_state.stock_categories[target_cat][name] = code
                     save_stocks_data(st.session_state.stock_categories)
-                    st.success(f"'{name}' 종목이 저장되었습니다!")
+                    st.success(f"'{name}' 종목이 추가되었습니다!")
                     st.rerun()
 
 st.sidebar.markdown("---")
@@ -156,9 +167,7 @@ selected_category = st.sidebar.selectbox("카테고리 선택:", category_list)
 available_stocks = st.session_state.stock_categories[selected_category]
 selected_stock = st.sidebar.selectbox("종목 선택:", list(available_stocks.keys()))
 
-stock_info = available_stocks[selected_stock]
-stock_code = stock_info[0]
-sheet1_name = stock_info[1] if len(stock_info) > 1 else None
+stock_code = available_stocks[selected_stock]
 
 if st.sidebar.button(f"❌ {selected_stock} 삭제"):
     del st.session_state.stock_categories[selected_category][selected_stock]
@@ -168,15 +177,15 @@ if st.sidebar.button(f"❌ {selected_stock} 삭제"):
 # ==================== 메인 화면 ====================
 st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드 시뮬레이션")
 
-# 과거 영업이익 수집 (엑셀 + API)
-hist_ops = get_historical_operating_profit_reliable(stock_code, sheet1_name)
+# 과거 영업이익 웹 API 수집
+hist_ops = fetch_operating_profit(stock_code)
 
 past_years = ['2021', '2022', '2023', '2024', '2025']
 future_years = ['2026', '2027']
 
 st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
 
-st.markdown("**(1) 과거 실적 영업이익 (자동 로드 / 수동 수정 가능)**")
+st.markdown("**(1) 과거 실적 영업이익 (자동 수집 / 필요 시 수정 가능)**")
 p_cols = st.columns(len(past_years))
 final_ops = {}
 
@@ -220,7 +229,7 @@ def get_stock_data_api(code, start, end):
 try:
     stock_df = get_stock_data_api(stock_code, start_date, end_date)
 except Exception as e:
-    st.error(f"API에서 주가 데이터를 불러오는 중 오류가 발생했습니다: {e}")
+    st.error(f"주가 데이터를 불러오는 중 오류가 발생했습니다: {e}")
     st.stop()
 
 if stock_df.empty:
