@@ -29,13 +29,12 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- JSON 저장/로드 (엑셀 시트명 제거) ---
+# --- JSON 저장/로드 (엑셀 완전 제거) ---
 def load_stocks_data():
     if os.path.exists(JSON_FILE):
         try:
             with open(JSON_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # 기존 [code, sheet] 형태 데이터를 code 문자열로 변환 (호환성 처리)
                 cleaned_data = {}
                 for cat, stocks in data.items():
                     cleaned_data[cat] = {}
@@ -70,55 +69,79 @@ def get_krx_stock_list():
 
 krx_df = get_krx_stock_list()
 
-# --- 범용 영업이익 수집 함수 (API + Web Table) ---
+# --- 범용 영업이익 수집 함수 (강화 버전) ---
 @st.cache_data(ttl=86400)
 def fetch_operating_profit(code):
     ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
     
-    # 1차 시도: 네이버 모바일 API (가장 빠르고 정확함)
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Referer': f'https://finance.naver.com/item/main.naver?code={code}'
+    })
+
+    # 1. 네이버 모바일 API 시도
     try:
         url = f"https://m.stock.naver.com/api/item/getCoInfoFnnrPrmList.naver?code={code}&fnnrType=A"
-        headers = {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)'}
-        res = requests.get(url, headers=headers, timeout=5)
+        res = session.get(url, timeout=5)
         if res.status_code == 200:
             data = res.json()
-            if 'fnnrPrmList' in data:
+            if 'fnnrPrmList' in data and data['fnnrPrmList']:
                 for item in data['fnnrPrmList']:
-                    if item.get('accCd') == '0001000' or '영업이익' in item.get('accNm', ''):
+                    acc_nm = str(item.get('accNm', ''))
+                    acc_cd = str(item.get('accCd', ''))
+                    
+                    if acc_cd == '0001000' or ('영업이익' in acc_nm and '률' not in acc_nm):
                         for col in item.get('fnnrPrmColList', []):
                             yr_str = str(col.get('yyyymm', ''))[:4]
                             if yr_str in ops:
-                                val_str = str(col.get('val', '0')).replace(',', '')
-                                try:
-                                    # 백만원 단위 -> 원 단위
-                                    ops[yr_str] = float(val_str) * 100_000_000.0
-                                except ValueError:
-                                    pass
+                                val_str = str(col.get('val', '0')).replace(',', '').strip()
+                                if val_str and val_str != '-':
+                                    try:
+                                        # 백만원 단위 -> 원 단위
+                                        ops[yr_str] = float(val_str) * 100_000_000.0
+                                    except ValueError:
+                                        pass
                         break
     except Exception:
         pass
 
-    # 2차 시도: 1차 실패 시 네이버 PC 웹 주요재무정보 테이블 파싱
+    # 2. API 실패 시 네이버 PC 웹 주요재무정보 테이블 파싱
     if not any(ops.values()):
         try:
             url = f"https://finance.naver.com/item/main.naver?code={code}"
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            res = requests.get(url, headers=headers, timeout=5)
+            res = session.get(url, timeout=5)
             tables = pd.read_html(res.text)
             
             for tbl in tables:
-                if any('영업이익' in str(cell) for cell in tbl.iloc[:, 0]):
-                    row_idx = tbl[tbl.iloc[:, 0].astype(str).str.contains('영업이익')].index[0]
-                    for col_idx in range(1, len(tbl.columns)):
-                        col_hdr = str(tbl.columns[col_idx])
-                        val = tbl.iloc[row_idx, col_idx]
+                # 문자열 전처리 후 영업이익 행 찾기
+                tbl_flat = tbl.copy()
+                first_col = tbl_flat.iloc[:, 0].astype(str)
+                
+                target_mask = first_col.str.contains('영업이익') & ~first_col.str.contains('률')
+                if target_mask.any():
+                    row_idx = tbl_flat[target_mask].index[0]
+                    
+                    # 컬럼명 유연 처리
+                    cols_str = []
+                    for c in tbl_flat.columns:
+                        if isinstance(c, tuple):
+                            cols_str.append(' '.join([str(x) for x in c]))
+                        else:
+                            cols_str.append(str(c))
+                    
+                    for col_idx in range(1, len(cols_str)):
+                        c_name = cols_str[col_idx]
+                        val = tbl_flat.iloc[row_idx, col_idx]
+                        
                         for yr in ops.keys():
-                            if yr in col_hdr and pd.notnull(val):
+                            if yr in c_name and pd.notnull(val):
                                 clean_v = re.sub(r'[^0-9.-]', '', str(val))
-                                try:
-                                    ops[yr] = float(clean_v) * 100_000_000.0
-                                except ValueError:
-                                    pass
+                                if clean_v:
+                                    try:
+                                        ops[yr] = float(clean_v) * 100_000_000.0
+                                    except ValueError:
+                                        pass
                     break
         except Exception:
             pass
@@ -177,7 +200,7 @@ if st.sidebar.button(f"❌ {selected_stock} 삭제"):
 # ==================== 메인 화면 ====================
 st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드 시뮬레이션")
 
-# 과거 영업이익 웹 API 수집
+# 과거 영업이익 수집
 hist_ops = fetch_operating_profit(stock_code)
 
 past_years = ['2021', '2022', '2023', '2024', '2025']
