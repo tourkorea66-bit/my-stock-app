@@ -7,12 +7,20 @@ from datetime import datetime, timedelta
 import os
 import json
 import requests
-import re
+import zipfile
+import io
+import xml.etree.ElementTree as ET
 
 # 페이지 기본 설정
 st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
 
 JSON_FILE = 'custom_stocks.json'
+
+# ==========================================
+# 🔑 Open DART API 키 설정 (무료 발급 필요)
+# https://opendart.fss.or.kr/ 에서 인증키 신청
+DART_API_KEY = "YOUR_DART_API_KEY_HERE" 
+# ==========================================
 
 DEFAULT_STOCKS = {
     '반도체': {
@@ -29,7 +37,7 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- JSON 저장/로드 (엑셀 완전 제거) ---
+# --- JSON 저장/로드 ---
 def load_stocks_data():
     if os.path.exists(JSON_FILE):
         try:
@@ -69,80 +77,61 @@ def get_krx_stock_list():
 
 krx_df = get_krx_stock_list()
 
-# --- 범용 영업이익 수집 함수 (강화 버전) ---
-@st.cache_data(ttl=86400)
-def fetch_operating_profit(code):
-    ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
+# --- Open DART 고유번호 매핑 캐시 ---
+@st.cache_data(ttl=86400 * 30)
+def get_dart_corp_code_map(api_key):
+    corp_map = {}
+    if not api_key or api_key == "YOUR_DART_API_KEY_HERE":
+        return corp_map
     
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': f'https://finance.naver.com/item/main.naver?code={code}'
-    })
-
-    # 1. 네이버 모바일 API 시도
+    url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={api_key}"
     try:
-        url = f"https://m.stock.naver.com/api/item/getCoInfoFnnrPrmList.naver?code={code}&fnnrType=A"
-        res = session.get(url, timeout=5)
+        res = requests.get(url, timeout=10)
         if res.status_code == 200:
-            data = res.json()
-            if 'fnnrPrmList' in data and data['fnnrPrmList']:
-                for item in data['fnnrPrmList']:
-                    acc_nm = str(item.get('accNm', ''))
-                    acc_cd = str(item.get('accCd', ''))
-                    
-                    if acc_cd == '0001000' or ('영업이익' in acc_nm and '률' not in acc_nm):
-                        for col in item.get('fnnrPrmColList', []):
-                            yr_str = str(col.get('yyyymm', ''))[:4]
-                            if yr_str in ops:
-                                val_str = str(col.get('val', '0')).replace(',', '').strip()
-                                if val_str and val_str != '-':
-                                    try:
-                                        # 백만원 단위 -> 원 단위
-                                        ops[yr_str] = float(val_str) * 100_000_000.0
-                                    except ValueError:
-                                        pass
-                        break
+            with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+                xml_data = z.read('CORPCODE.xml')
+                root = ET.fromstring(xml_data)
+                for list_item in root.findall('list'):
+                    stock_code = list_item.findtext('stock_code', '').strip()
+                    corp_code = list_item.findtext('corp_code', '').strip()
+                    if stock_code and corp_code:
+                        corp_map[stock_code.zfill(6)] = corp_code
     except Exception:
         pass
+    return corp_map
 
-    # 2. API 실패 시 네이버 PC 웹 주요재무정보 테이블 파싱
-    if not any(ops.values()):
+# --- DART 정식 재무제표 기반 영업이익 수집 ---
+@st.cache_data(ttl=86400)
+def fetch_operating_profit_dart(code, api_key):
+    ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
+    
+    if not api_key or api_key == "YOUR_DART_API_KEY_HERE":
+        return ops
+
+    corp_map = get_dart_corp_code_map(api_key)
+    corp_code = corp_map.get(str(code).zfill(6))
+    
+    if not corp_code:
+        return ops
+
+    # 2021년~2025년 사업보고서(11011) 데이터 조회
+    for b_year in ['2021', '2022', '2023', '2024', '2025']:
         try:
-            url = f"https://finance.naver.com/item/main.naver?code={code}"
-            res = session.get(url, timeout=5)
-            tables = pd.read_html(res.text)
+            # 연결재무제표 주요계정 API
+            url = f"https://opendart.fss.or.kr/api/fnlttSinglAcnt.json?crtfc_key={api_key}&corp_code={corp_code}&bsns_year={b_year}&reprt_code=11011"
+            res = requests.get(url, timeout=5)
+            data = res.json()
             
-            for tbl in tables:
-                # 문자열 전처리 후 영업이익 행 찾기
-                tbl_flat = tbl.copy()
-                first_col = tbl_flat.iloc[:, 0].astype(str)
-                
-                target_mask = first_col.str.contains('영업이익') & ~first_col.str.contains('률')
-                if target_mask.any():
-                    row_idx = tbl_flat[target_mask].index[0]
-                    
-                    # 컬럼명 유연 처리
-                    cols_str = []
-                    for c in tbl_flat.columns:
-                        if isinstance(c, tuple):
-                            cols_str.append(' '.join([str(x) for x in c]))
-                        else:
-                            cols_str.append(str(c))
-                    
-                    for col_idx in range(1, len(cols_str)):
-                        c_name = cols_str[col_idx]
-                        val = tbl_flat.iloc[row_idx, col_idx]
-                        
-                        for yr in ops.keys():
-                            if yr in c_name and pd.notnull(val):
-                                clean_v = re.sub(r'[^0-9.-]', '', str(val))
-                                if clean_v:
-                                    try:
-                                        ops[yr] = float(clean_v) * 100_000_000.0
-                                    except ValueError:
-                                        pass
-                    break
+            if data.get('status') == '000' and 'list' in data:
+                for item in data['list']:
+                    # 손익계산서/포괄손익계산서의 영업이익 항목 찾기
+                    account_nm = item.get('account_nm', '')
+                    if ('영업이익' in account_nm or '영업손실' in account_nm) and '률' not in account_nm:
+                        # thstrm_amount (당기금액)
+                        val_str = item.get('thstrm_amount', '0').replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            ops[b_year] = float(val_str) # 원 단위
+                        break
         except Exception:
             pass
 
@@ -150,6 +139,14 @@ def fetch_operating_profit(code):
 
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ 카테고리 & 종목 관리")
+
+# API KEY 입력 받기 (설정 안되어 있을 경우 사이드바에서 받아옴)
+if DART_API_KEY == "YOUR_DART_API_KEY_HERE":
+    dart_key_input = st.sidebar.text_input("🔑 Open DART API 키 입력", type="password")
+    if dart_key_input:
+        DART_API_KEY = dart_key_input
+    else:
+        st.sidebar.info("💡 과거 실적 자동 조회를 위해 DART API 키를 입력해주세요.")
 
 with st.sidebar.expander("📁 카테고리 추가"):
     new_cat_name = st.text_input("새 카테고리 이름", key="new_cat_input").strip()
@@ -200,15 +197,15 @@ if st.sidebar.button(f"❌ {selected_stock} 삭제"):
 # ==================== 메인 화면 ====================
 st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드 시뮬레이션")
 
-# 과거 영업이익 수집
-hist_ops = fetch_operating_profit(stock_code)
+# DART API 통한 수집
+hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
 
 past_years = ['2021', '2022', '2023', '2024', '2025']
 future_years = ['2026', '2027']
 
 st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
 
-st.markdown("**(1) 과거 실적 영업이익 (자동 수집 / 필요 시 수정 가능)**")
+st.markdown("**(1) 과거 실적 영업이익 (DART 자동 수집 / 수동 수정 가능)**")
 p_cols = st.columns(len(past_years))
 final_ops = {}
 
