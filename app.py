@@ -6,31 +6,29 @@ import FinanceDataReader as fdr
 from datetime import datetime, timedelta
 import os
 import json
+import requests
 
 # 페이지 기본 설정
 st.set_page_config(page_title="반도체 & KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
 
-# 로컬 저장 파일 설정
 JSON_FILE = 'custom_stocks.json'
-EXCEL_FILE = 'sigmahunting.xlsx'
 
-# 기본 초기 데이터 (카테고리별 구조)
 DEFAULT_STOCKS = {
     '반도체': {
-        'SK하이닉스': ('000660', 'SK하이닉스1'),
-        '티엘비': ('356860', '티엘비1'),
-        '엠케이전자': ('033160', '엠케이전자1'),
-        'ISC': ('095340', 'ISC1'),
-        '엘티씨': ('170920', '엘티씨1'),
-        '하나마이크론': ('067310', '하나마이크론1'),
-        '하나머티리얼즈': ('166090', '하나머티리얼즈1'),
-        '코미코': ('183300', '코미코1'),
-        '에프에스티': ('036810', '에프에스티1 ')
+        'SK하이닉스': ['000660', None],
+        '티엘비': ['356860', None],
+        '엠케이전자': ['033160', None],
+        'ISC': ['095340', None],
+        '엘티씨': ['170920', None],
+        '하나마이크론': ['067310', None],
+        '하나머티리얼즈': ['166090', None],
+        '코미코': ['183300', None],
+        '에프에스티': ['036810', None]
     },
     '관심종목': {}
 }
 
-# --- JSON 로드 및 저장 함수 ---
+# --- JSON 저장/로드 ---
 def load_stocks_data():
     if os.path.exists(JSON_FILE):
         try:
@@ -44,11 +42,10 @@ def save_stocks_data(data):
     with open(JSON_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-# 세션 상태 초기화
 if 'stock_categories' not in st.session_state:
     st.session_state.stock_categories = load_stocks_data()
 
-# KRX 전체 상장 종목 가져오기
+# KRX 상장 종목 데이터
 @st.cache_data(ttl=86400)
 def get_krx_stock_list():
     try:
@@ -63,18 +60,56 @@ def get_krx_stock_list():
 
 krx_df = get_krx_stock_list()
 
-@st.cache_resource
-def load_excel_file(file_path):
-    if os.path.exists(file_path):
-        return pd.ExcelFile(file_path)
-    return None
+# --- 네이버 금융 연간 영업이익 크롤링 함수 ---
+@st.cache_data(ttl=86400)
+def get_historical_operating_profit(code):
+    """
+    네이버 페이 증권 기업현황에서 연간 영업이익(원 단위)을 크롤링합니다.
+    """
+    url = f"https://finance.naver.com/item/main.naver?code={code}"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    ops = {}
+    try:
+        res = requests.get(url, headers=headers)
+        tables = pd.read_html(res.text)
+        
+        # 주요재무정보 테이블 찾기
+        fin_df = None
+        for tbl in tables:
+            if any('영업이익' in str(col) for col in tbl.columns) or any('영업이익' in str(row) for row in tbl.values):
+                fin_df = tbl
+                break
+                
+        if fin_df is not None:
+            # 컬럼정리 (연도 추출)
+            fin_df.columns = [f"{c[0]}_{c[1]}" if isinstance(c, tuple) else str(c) for c in fin_df.columns]
+            
+            # 영업이익 행 찾기
+            op_row = None
+            for idx, row in fin_df.iterrows():
+                if '영업이익' in str(row.values[0]):
+                    op_row = row
+                    break
+            
+            if op_row is not None:
+                for col in fin_df.columns:
+                    col_str = str(col)
+                    # 2021~2025 연도 매칭
+                    for yr in ['2021', '2022', '2023', '2024', '2025']:
+                        if yr in col_str and '연간' in col_str:
+                            val = op_row[col]
+                            if pd.notnull(val):
+                                # 억원 단위를 원 단위로 변환 (* 100,000,000)
+                                ops[yr] = float(str(val).replace(',', '')) * 100_000_000.0
+    except Exception:
+        pass
 
-xls = load_excel_file(EXCEL_FILE)
+    return ops
 
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ 카테고리 & 종목 관리")
 
-# 1. 신규 카테고리 추가 UI
 with st.sidebar.expander("📁 카테고리 추가"):
     new_cat_name = st.text_input("새 카테고리 이름", key="new_cat_input").strip()
     if st.button("카테고리 생성"):
@@ -84,12 +119,10 @@ with st.sidebar.expander("📁 카테고리 추가"):
             st.success(f"'{new_cat_name}' 카테고리가 추가되었습니다.")
             st.rerun()
 
-# 2. 신규 종목 검색 및 추가 UI
 with st.sidebar.expander("➕ 신규 종목 추가"):
     if not krx_df.empty:
         search_options = [f"{row['Name']} ({row['Code']})" for _, row in krx_df.iterrows()]
         selected_search = st.selectbox("KRX 종목 검색:", options=["선택하세요..."] + search_options)
-        
         target_cat = st.selectbox("추가할 카테고리 선택:", list(st.session_state.stock_categories.keys()))
         
         if st.button("종목 저장"):
@@ -97,19 +130,14 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 name = selected_search.split(" (")[0]
                 code = selected_search.split(" (")[1].replace(")", "")
                 
-                # 중복 검사
                 exists = any(name in stocks for stocks in st.session_state.stock_categories.values())
                 if not exists:
                     st.session_state.stock_categories[target_cat][name] = [code, None]
                     save_stocks_data(st.session_state.stock_categories)
-                    st.success(f"'{name}' 종목이 '{target_cat}'에 저장되었습니다!")
+                    st.success(f"'{name}' 종목이 저장되었습니다!")
                     st.rerun()
-                else:
-                    st.info(f"'{name}' 종목은 이미 목록에 존재합니다.")
 
 st.sidebar.markdown("---")
-
-# 3. 종목 분석 선택 영역
 st.sidebar.title("🔍 분석 대상 선택")
 category_list = [cat for cat, stocks in st.session_state.stock_categories.items() if stocks]
 
@@ -119,63 +147,57 @@ if not category_list:
 
 selected_category = st.sidebar.selectbox("카테고리 선택:", category_list)
 available_stocks = st.session_state.stock_categories[selected_category]
-
 selected_stock = st.sidebar.selectbox("종목 선택:", list(available_stocks.keys()))
 
-stock_info = available_stocks[selected_stock]
-stock_code = stock_info[0]
-sheet1_name = stock_info[1]
+stock_code = available_stocks[selected_stock][0]
 
-# 종목 삭제 버튼
 if st.sidebar.button(f"❌ {selected_stock} 삭제"):
     del st.session_state.stock_categories[selected_category][selected_stock]
     save_stocks_data(st.session_state.stock_categories)
-    st.sidebar.warning(f"'{selected_stock}' 종목이 삭제되었습니다.")
     st.rerun()
 
 # ==================== 메인 화면 ====================
-st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) 5년치 POR 밴드 시뮬레이션")
+st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드 시뮬레이션")
 
-# 연도 설정 (2021 ~ 2027)
-years = ['2021', '2022', '2023', '2024', '2025', '2026', '2027']
-default_ops = {yr: 0.0 for yr in years}
+# 과거 영업이익 API 수집
+hist_ops = get_historical_operating_profit(stock_code)
 
-# 엑셀 파일에서 기본 영업이익 불러오기
-if xls is not None and sheet1_name is not None:
-    try:
-        df1 = pd.read_excel(xls, sheet_name=sheet1_name)
-        if len(df1) >= 3:
-            row_yr = [str(x) for x in df1.iloc[1].tolist()]
-            row_op = df1.iloc[2].tolist()
-            
-            for yr_col, op_val in zip(row_yr, row_op):
-                clean_yr = yr_col.replace('(E)', '').replace('.0', '').strip()
-                if clean_yr in years:
-                    try:
-                        default_ops[clean_yr] = float(op_val)
-                    except (ValueError, TypeError):
-                        pass
-    except Exception:
-        pass
+past_years = ['2021', '2022', '2023', '2024', '2025']
+future_years = ['2026', '2027']
 
-# 영업이익 수동 입력 UI (억원 단위)
-st.subheader("⚙️ 연도별 추정 영업이익(억원) 입력/수정")
-cols = st.columns(len(years))
-updated_ops = {}
+st.subheader("📊 연도별 영업이익 현황 및 추정치 입력 (단위: 억원)")
 
-for idx, yr in enumerate(years):
-    with cols[idx]:
-        init_val_100m = default_ops.get(yr, 0.0) / 100_000_000.0
-        val_100m = st.number_input(
-            f"{yr}년 (억원)", 
-            value=float(init_val_100m), 
+# 과거 실적 (API 수집 데이터)
+st.markdown("**(1) 과거 실적 영업이익 (API 자동 수집)**")
+p_cols = st.columns(len(past_years))
+final_ops = {}
+
+for idx, yr in enumerate(past_years):
+    with p_cols[idx]:
+        val_원 = hist_ops.get(yr, 0.0)
+        val_억원 = val_원 / 100_000_000.0
+        st.metric(label=f"{yr}년 실적", value=f"{val_억원:,.1f} 억원")
+        final_ops[yr] = val_원
+
+st.markdown("---")
+
+# 올해 및 내년 추정치 (사용자 입력)
+st.markdown("**(2) 올해/내년 추정 영업이익 (수동 입력)**")
+f_cols = st.columns(len(future_years) + 3) # 레이아웃 정렬
+
+for idx, yr in enumerate(future_years):
+    with f_cols[idx]:
+        default_val = hist_ops.get(yr, 0.0) / 100_000_000.0
+        input_100m = st.number_input(
+            f"{yr}년 추정(억원)", 
+            value=float(default_val), 
             step=10.0, 
             format="%.1f",
             key=f"input_{selected_stock}_{yr}"
         )
-        updated_ops[yr] = val_100m * 100_000_000.0
+        final_ops[yr] = input_100m * 100_000_000.0
 
-# 주가 데이터 수집 API
+# 주가 데이터 수집
 end_date = datetime.today()
 start_date = end_date - timedelta(days=5 * 365)
 
@@ -194,12 +216,11 @@ if stock_df.empty:
     st.error("불러온 주가 데이터가 없습니다.")
     st.stop()
 
-# Dataframe 가공
+# Dataframe 가공 및 시가총액 계산
 stock_df['날짜'] = pd.to_datetime(stock_df['Date'])
 stock_df['종가'] = pd.to_numeric(stock_df['Close'], errors='coerce')
 stock_df['연도'] = stock_df['날짜'].dt.year.astype(str)
 
-# 시가총액 계산
 if 'Marcap' in stock_df.columns and stock_df['Marcap'].notnull().sum() > 0:
     stock_df['시가총액'] = pd.to_numeric(stock_df['Marcap'], errors='coerce')
 else:
@@ -211,7 +232,7 @@ else:
         stock_df['시가총액'] = np.nan
 
 # 영업이익 매핑 및 POR 계산
-stock_df['수정_영업이익'] = stock_df['연도'].map(updated_ops)
+stock_df['수정_영업이익'] = stock_df['연도'].map(final_ops)
 stock_df['수정_영업이익'] = pd.to_numeric(stock_df['수정_영업이익'], errors='coerce')
 
 stock_df['수정_POR'] = np.where(
