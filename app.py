@@ -60,50 +60,64 @@ def get_krx_stock_list():
 
 krx_df = get_krx_stock_list()
 
-# --- 네이버 금융 연간 영업이익 크롤링 함수 ---
+# --- 네이버 증권 API 기반 연간 영업이익 수집 (개선 버전) ---
 @st.cache_data(ttl=86400)
 def get_historical_operating_profit(code):
     """
-    네이버 페이 증권 기업현황에서 연간 영업이익(원 단위)을 크롤링합니다.
+    네이버 증권 기업 재무 API를 호출하여 연간 영업이익(원)을 수집합니다.
     """
-    url = f"https://finance.naver.com/item/main.naver?code={code}"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    url = f"https://m.stock.naver.com/api/stock/{code}/integration"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1'
+    }
     
     ops = {}
     try:
-        res = requests.get(url, headers=headers)
-        tables = pd.read_html(res.text)
-        
-        # 주요재무정보 테이블 찾기
-        fin_df = None
-        for tbl in tables:
-            if any('영업이익' in str(col) for col in tbl.columns) or any('영업이익' in str(row) for row in tbl.values):
-                fin_df = tbl
-                break
-                
-        if fin_df is not None:
-            # 컬럼정리 (연도 추출)
-            fin_df.columns = [f"{c[0]}_{c[1]}" if isinstance(c, tuple) else str(c) for c in fin_df.columns]
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            # 재무 정보 데이터 추출
+            finance_data = data.get('totalInfos', [])
             
-            # 영업이익 행 찾기
-            op_row = None
-            for idx, row in fin_df.iterrows():
-                if '영업이익' in str(row.values[0]):
-                    op_row = row
+            # 연간 재무제표 검색
+            for item in finance_data:
+                # 영업이익 관련 항목 파싱
+                if item.get('key') == '영업이익':
+                    # 연간 실적 데이터 배열 확인
+                    years_data = item.get('value', [])
+                    for yr_info in years_data:
+                        # '2021/12' 또는 '2021' 형태 분석
+                        title = yr_info.get('title', '')
+                        val_str = yr_info.get('value', '0').replace(',', '')
+                        
+                        for yr in ['2021', '2022', '2023', '2024', '2025']:
+                            if yr in title:
+                                try:
+                                    # 네이버 API의 재무 금액 단위(억원) -> 원 단위로 변환
+                                    ops[yr] = float(val_str) * 100_000_000.0
+                                except ValueError:
+                                    ops[yr] = 0.0
+    except Exception as e:
+        st.warning(f"영업이익 수집 중 참고사항: {e}")
+
+    # 데이터 미수집 시 대체 파싱 (WiseFn/네이버 웹 파싱 2차시도)
+    if not any(ops.values()):
+        try:
+            fallback_url = f"https://finance.naver.com/item/coinfo.naver?code={code}"
+            tables = pd.read_html(fallback_url, encoding='euc-kr')
+            for tbl in tables:
+                if any('영업이익' in str(cell) for cell in tbl.iloc[:, 0]):
+                    row_idx = tbl[tbl.iloc[:, 0].astype(str).str.contains('영업이익')].index[0]
+                    for col_idx in range(1, len(tbl.columns)):
+                        col_name = str(tbl.columns[col_idx])
+                        val = tbl.iloc[row_idx, col_idx]
+                        for yr in ['2021', '2022', '2023', '2024', '2025']:
+                            if yr in col_name and pd.notnull(val):
+                                clean_val = float(str(val).replace(',', ''))
+                                ops[yr] = clean_val * 100_000_000.0
                     break
-            
-            if op_row is not None:
-                for col in fin_df.columns:
-                    col_str = str(col)
-                    # 2021~2025 연도 매칭
-                    for yr in ['2021', '2022', '2023', '2024', '2025']:
-                        if yr in col_str and '연간' in col_str:
-                            val = op_row[col]
-                            if pd.notnull(val):
-                                # 억원 단위를 원 단위로 변환 (* 100,000,000)
-                                ops[yr] = float(str(val).replace(',', '')) * 100_000_000.0
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     return ops
 
@@ -183,7 +197,7 @@ st.markdown("---")
 
 # 올해 및 내년 추정치 (사용자 입력)
 st.markdown("**(2) 올해/내년 추정 영업이익 (수동 입력)**")
-f_cols = st.columns(len(future_years) + 3) # 레이아웃 정렬
+f_cols = st.columns(len(future_years) + 3)
 
 for idx, yr in enumerate(future_years):
     with f_cols[idx]:
