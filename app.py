@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 import os
 import json
 import requests
+from bs4 import BeautifulSoup
+import re
 
 # 페이지 기본 설정
 st.set_page_config(page_title="반도체 & KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
@@ -60,62 +62,70 @@ def get_krx_stock_list():
 
 krx_df = get_krx_stock_list()
 
-# --- 네이버 증권 API 기반 연간 영업이익 수집 (개선 버전) ---
+# --- 네이버 금융 연간 영업이익 직접 크롤링 (강화된 버전) ---
 @st.cache_data(ttl=86400)
 def get_historical_operating_profit(code):
-    """
-    네이버 증권 기업 재무 API를 호출하여 연간 영업이익(원)을 수집합니다.
-    """
-    url = f"https://m.stock.naver.com/api/stock/{code}/integration"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1'
-    }
+    ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
     
-    ops = {}
+    # METHOD 1: 네이버 증권 기업분석(WiseFn 테이블) 직접 파싱
     try:
+        url = f"https://finance.naver.com/item/coinfo.naver?code={code}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
         res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            # 재무 정보 데이터 추출
-            finance_data = data.get('totalInfos', [])
-            
-            # 연간 재무제표 검색
-            for item in finance_data:
-                # 영업이익 관련 항목 파싱
-                if item.get('key') == '영업이익':
-                    # 연간 실적 데이터 배열 확인
-                    years_data = item.get('value', [])
-                    for yr_info in years_data:
-                        # '2021/12' 또는 '2021' 형태 분석
-                        title = yr_info.get('title', '')
-                        val_str = yr_info.get('value', '0').replace(',', '')
-                        
-                        for yr in ['2021', '2022', '2023', '2024', '2025']:
-                            if yr in title:
-                                try:
-                                    # 네이버 API의 재무 금액 단위(억원) -> 원 단위로 변환
-                                    ops[yr] = float(val_str) * 100_000_000.0
-                                except ValueError:
-                                    ops[yr] = 0.0
-    except Exception as e:
-        st.warning(f"영업이익 수집 중 참고사항: {e}")
+        res.encoding = 'euc-kr'
+        
+        soup = BeautifulSoup(res.text, 'html.parser')
+        # 재무제표 Iframe 또는 내부 테이블 추적
+        tables = pd.read_html(res.text, encoding='euc-kr')
+        
+        for tbl in tables:
+            # 영업이익 행 탐색
+            tbl_str = tbl.to_string()
+            if '영업이익' in tbl_str:
+                # 컬럼 파싱 (연도 추출)
+                cols = [str(c) for c in tbl.columns]
+                
+                # 영업이익 행 찾기
+                for _, row in tbl.iterrows():
+                    first_cell = str(row.iloc[0])
+                    if '영업이익' in first_cell and '률' not in first_cell:
+                        for col_idx, col_name in enumerate(cols):
+                            for yr in ops.keys():
+                                if yr in str(col_name) and '연간' in str(col_name):
+                                    val = row.iloc[col_idx]
+                                    if pd.notnull(val):
+                                        clean_v = str(val).replace(',', '').strip()
+                                        try:
+                                            ops[yr] = float(clean_v) * 100_000_000.0 # 억원 -> 원
+                                        except ValueError:
+                                            pass
+                        break
+    except Exception:
+        pass
 
-    # 데이터 미수집 시 대체 파싱 (WiseFn/네이버 웹 파싱 2차시도)
+    # METHOD 2: 1차 수집 실패 시 Mobile API 백업 호출
     if not any(ops.values()):
         try:
-            fallback_url = f"https://finance.naver.com/item/coinfo.naver?code={code}"
-            tables = pd.read_html(fallback_url, encoding='euc-kr')
-            for tbl in tables:
-                if any('영업이익' in str(cell) for cell in tbl.iloc[:, 0]):
-                    row_idx = tbl[tbl.iloc[:, 0].astype(str).str.contains('영업이익')].index[0]
-                    for col_idx in range(1, len(tbl.columns)):
-                        col_name = str(tbl.columns[col_idx])
-                        val = tbl.iloc[row_idx, col_idx]
-                        for yr in ['2021', '2022', '2023', '2024', '2025']:
-                            if yr in col_name and pd.notnull(val):
-                                clean_val = float(str(val).replace(',', ''))
-                                ops[yr] = clean_val * 100_000_000.0
-                    break
+            m_url = f"https://m.stock.naver.com/api/stock/{code}/integration"
+            m_headers = {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15'
+            }
+            m_res = requests.get(m_url, headers=m_headers, timeout=5)
+            if m_res.status_code == 200:
+                data = m_res.json()
+                for item in data.get('totalInfos', []):
+                    if item.get('key') == '영업이익':
+                        for yr_info in item.get('value', []):
+                            title = yr_info.get('title', '')
+                            val_str = str(yr_info.get('value', '0')).replace(',', '').strip()
+                            for yr in ops.keys():
+                                if yr in title:
+                                    try:
+                                        ops[yr] = float(val_str) * 100_000_000.0
+                                    except ValueError:
+                                        pass
         except Exception:
             pass
 
@@ -179,35 +189,39 @@ hist_ops = get_historical_operating_profit(stock_code)
 past_years = ['2021', '2022', '2023', '2024', '2025']
 future_years = ['2026', '2027']
 
-st.subheader("📊 연도별 영업이익 현황 및 추정치 입력 (단위: 억원)")
+st.subheader("📊 연도별 영업이익 현황 및 추정치 입력/수정 (단위: 억원)")
 
-# 과거 실적 (API 수집 데이터)
-st.markdown("**(1) 과거 실적 영업이익 (API 자동 수집)**")
+# (1) 과거 실적 영역 (API 자동수집 + 수동 수정 가능하도록 number_input 제공)
+st.markdown("**(1) 과거 실적 영업이익 (자동 조회 / 필요시 수동 수정 가능)**")
 p_cols = st.columns(len(past_years))
 final_ops = {}
 
 for idx, yr in enumerate(past_years):
     with p_cols[idx]:
-        val_원 = hist_ops.get(yr, 0.0)
-        val_억원 = val_원 / 100_000_000.0
-        st.metric(label=f"{yr}년 실적", value=f"{val_억원:,.1f} 억원")
-        final_ops[yr] = val_원
+        auto_val_100m = hist_ops.get(yr, 0.0) / 100_000_000.0
+        val_input = st.number_input(
+            f"{yr}년 실적(억원)",
+            value=float(auto_val_100m),
+            step=10.0,
+            format="%.1f",
+            key=f"past_{selected_stock}_{yr}"
+        )
+        final_ops[yr] = val_input * 100_000_000.0
 
 st.markdown("---")
 
-# 올해 및 내년 추정치 (사용자 입력)
+# (2) 올해 및 내년 추정치 영역
 st.markdown("**(2) 올해/내년 추정 영업이익 (수동 입력)**")
 f_cols = st.columns(len(future_years) + 3)
 
 for idx, yr in enumerate(future_years):
     with f_cols[idx]:
-        default_val = hist_ops.get(yr, 0.0) / 100_000_000.0
         input_100m = st.number_input(
             f"{yr}년 추정(억원)", 
-            value=float(default_val), 
+            value=0.0, 
             step=10.0, 
             format="%.1f",
-            key=f"input_{selected_stock}_{yr}"
+            key=f"future_{selected_stock}_{yr}"
         )
         final_ops[yr] = input_100m * 100_000_000.0
 
