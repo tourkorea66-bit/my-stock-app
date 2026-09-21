@@ -55,12 +55,17 @@ def load_stocks_data_public():
         }
         fetch_url = f"{SHARED_STORE_URL}?_t={int(time.time())}"
         res = requests.get(fetch_url, headers=headers, timeout=5, verify=False)
-        if res.status_code == 200:
+        
+        # 200 OK 응답 및 텍스트가 비어있지 않은 경우 파싱
+        if res.status_code == 200 and res.text.strip():
             data = res.json()
             if isinstance(data, dict) and len(data) > 0:
                 return data
+    except json.JSONDecodeError:
+        # 빈 데이터나 HTML 에러 응답 시 예외 처리
+        pass
     except Exception as e:
-        st.sidebar.warning(f"데이터 로드 경고: {e}")
+        st.sidebar.info("온라인 저장소 연결 불가. 기본 설정 데이터를 사용합니다.")
     return DEFAULT_STOCKS.copy()
 
 def save_stocks_data_public(data):
@@ -145,14 +150,15 @@ def _fetch_single_year_dart(args):
     try:
         url = f"https://opendart.fss.or.kr/api/fnlttSinglAcnt.json?crtfc_key={clean_key}&corp_code={corp_code}&bsns_year={b_year}&reprt_code=11011"
         res = requests.get(url, timeout=3)
-        data = res.json()
-        if data.get('status') == '000' and 'list' in data:
-            for item in data['list']:
-                account_nm = item.get('account_nm', '')
-                if ('영업이익' in account_nm or '영업손실' in account_nm) and '률' not in account_nm:
-                    val_str = item.get('thstrm_amount', '0').replace(',', '').strip()
-                    if val_str and val_str != '-':
-                        return b_year, float(val_str)
+        if res.status_code == 200 and res.text.strip():
+            data = res.json()
+            if data.get('status') == '000' and 'list' in data:
+                for item in data['list']:
+                    account_nm = item.get('account_nm', '')
+                    if ('영업이익' in account_nm or '영업손실' in account_nm) and '률' not in account_nm:
+                        val_str = item.get('thstrm_amount', '0').replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            return b_year, float(val_str)
     except Exception:
         pass
     return b_year, 0.0
