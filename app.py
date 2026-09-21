@@ -29,8 +29,8 @@ CORP_CODE_CACHE_FILE = os.path.join(BASE_DIR, 'corp_code_map.json')
 # 🔑 Open DART API 키 설정
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 
-# 🌐 kvdb.io 버킷 URL + 데이터 Key 이름 명시
-SHARED_STORE_URL = "https://kvdb.io/15NbjVXrgfHXm7L76LPHPn/por_stock_data"
+# 🌐 계정 인증 오류를 피하기 위해 신규 공개 키로 변경 완료
+SHARED_STORE_URL = "https://kvdb.io/por_stock_db_2026_shared_v1/por_stock_data"
 # ==========================================
 
 DEFAULT_STOCKS = {
@@ -48,7 +48,7 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- 🌐 kvdb.io 저장소 로드/저장 로직 (수정 강화) ---
+# --- 🌐 kvdb.io 저장소 로드/저장 로직 ---
 def load_stocks_data_public():
     try:
         headers = {
@@ -71,17 +71,17 @@ def save_stocks_data_public(data):
     }
     json_bytes = json.dumps(data, ensure_ascii=False).encode('utf-8')
     
-    # 1차 시도: PUT 요청
+    # 1차 시도: POST 요청
     try:
-        res = requests.put(SHARED_STORE_URL, data=json_bytes, headers=headers, timeout=5, verify=False)
+        res = requests.post(SHARED_STORE_URL, data=json_bytes, headers=headers, timeout=5, verify=False)
         if res.status_code in [200, 201, 204]:
             return True
     except Exception:
         pass
 
-    # 2차 시도: POST 요청 (PUT 실패 시 Fallback)
+    # 2차 시도: PUT 요청
     try:
-        res = requests.post(SHARED_STORE_URL, data=json_bytes, headers=headers, timeout=5, verify=False)
+        res = requests.put(SHARED_STORE_URL, data=json_bytes, headers=headers, timeout=5, verify=False)
         if res.status_code in [200, 201, 204]:
             return True
         else:
@@ -405,43 +405,81 @@ stock_df['수정_POR'] = np.where(
 )
 
 valid_por = stock_df['수정_POR'].dropna()
-mean_val = valid_por.mean() if len(valid_por) > 0 else 0.0
-std_val = valid_por.std() if len(valid_por) > 0 else 0.0
 
-stock_df['Mean'] = mean_val
-stock_df['+1σ'] = mean_val + std_val
-stock_df['+2σ'] = mean_val + (std_val * 2)
-stock_df['-1σ'] = mean_val - std_val
-stock_df['-2σ'] = mean_val - (std_val * 2)
+st.subheader("⚙️ POR 배수 범위 설정")
 
-c1, c2, c3, c4, c5 = st.columns(5)
-latest_close = stock_df['종가'].iloc[-1] if not stock_df.empty else 0
-latest_marcap_val = stock_df['시가총액'].dropna().iloc[-1] if not stock_df['시가총액'].dropna().empty else 0
+# 배수 기본값 계산
+if not valid_por.empty and len(valid_por) > 0:
+    min_por_val = float(valid_por.min())
+    max_por_val = float(valid_por.max())
+    med_por_val = float(valid_por.median())
+    
+    low_default = max(1.0, float(np.percentile(valid_por, 10)))
+    mid_default = max(low_default + 1.0, med_por_val)
+    high_default = max(mid_default + 1.0, float(np.percentile(valid_por, 90)))
+else:
+    min_por_val, max_por_val, med_por_val = 1.0, 30.0, 10.0
+    low_default, mid_default, high_default = 5.0, 10.0, 15.0
 
-c1.metric("최신 종가", f"{latest_close:,.0f} 원")
-c2.metric("현재 시가총액", f"{latest_marcap_val / 100_000_000:,.1f} 억원" if latest_marcap_val > 0 else "N/A")
-c3.metric(f"평균 POR ({start_date.year}~현재)", f"{mean_val:.2f}")
-c4.metric("표준편차 (STDEV)", f"{std_val:.2f}")
-c5.metric("+2σ 밴드 상단", f"{(mean_val + std_val*2):.2f}")
+col_b1, col_b2, col_b3 = st.columns(3)
+with col_b1:
+    por_low = st.number_input("저평가 배수 (Low)", value=round(low_default, 1), step=0.5, format="%.1f")
+with col_b2:
+    por_mid = st.number_input("적정 배수 (Mid)", value=round(mid_default, 1), step=0.5, format="%.1f")
+with col_b3:
+    por_high = st.number_input("고평가 배수 (High)", value=round(high_default, 1), step=0.5, format="%.1f")
+
+# 밴드 가격 계산
+stock_df['Band_Low'] = np.where(stock_df['수정_영업이익'] > 0, (stock_df['수정_영업이익'] * por_low) / (stock_df['시가총액'] / stock_df['종가']), np.nan)
+stock_df['Band_Mid'] = np.where(stock_df['수정_영업이익'] > 0, (stock_df['수정_영업이익'] * por_mid) / (stock_df['시가총액'] / stock_df['종가']), np.nan)
+stock_df['Band_High'] = np.where(stock_df['수정_영업이익'] > 0, (stock_df['수정_영업이익'] * por_high) / (stock_df['시가총액'] / stock_df['종가']), np.nan)
+
+# 차트 그리기
+st.subheader("📈 주가 및 POR 밴드 차트")
 
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['수정_POR'], mode='lines', name='POR (실시간)', line=dict(color='#FFFFFF', width=2)))
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['+2σ'], mode='lines', name='+2σ (상단)', line=dict(color='#FF5555', width=1.5, dash='dash')))
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['+1σ'], mode='lines', name='+1σ', line=dict(color='#FFB86C', width=1.5, dash='dot')))
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['Mean'], mode='lines', name='Mean (평균)', line=dict(color='#50FA7B', width=2, dash='solid')))
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['-1σ'], mode='lines', name='-1σ', line=dict(color='#8BE9FD', width=1.5, dash='dot')))
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['-2σ'], mode='lines', name='-2σ (하단)', line=dict(color='#BD93F9', width=1.5, dash='dash')))
+
+# 밴드 라인들
+fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['Band_High'], mode='lines', name=f'POR {por_high}x (고평가)', line=dict(color='rgba(239, 83, 80, 0.7)', width=1.5, dash='dash')))
+fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['Band_Mid'], mode='lines', name=f'POR {por_mid}x (적정)', line=dict(color='rgba(255, 179, 0, 0.8)', width=1.5, dash='dot')))
+fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['Band_Low'], mode='lines', name=f'POR {por_low}x (저평가)', line=dict(color='rgba(102, 187, 106, 0.7)', width=1.5, dash='dash')))
+
+# 실제 주가
+fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['종가'], mode='lines', name='실제 주가', line=dict(color='#2962FF', width=2.5)))
 
 fig.update_layout(
-    title=dict(text=f"<b>{selected_stock} {start_date.year}년 1월 ~ 현재 POR 밴드 차트</b>", font=dict(color='#FFFFFF', size=20)),
-    paper_bgcolor='#1E1E1E',
-    plot_bgcolor='#141414',
-    font=dict(color='#FFFFFF'),
-    xaxis=dict(title="날짜", showgrid=True, gridcolor='#333333', color='#FFFFFF'),
-    yaxis=dict(title="POR", showgrid=True, gridcolor='#333333', color='#FFFFFF'),
+    title=dict(text=f"<b>{selected_stock} ({stock_code}) POR Band Chart</b>", font=dict(size=18)),
+    xaxis_title="날짜",
+    yaxis_title="주가 (원)",
     hovermode="x unified",
-    height=600,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color='#FFFFFF'))
+    template="plotly_white",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    margin=dict(l=20, r=20, t=60, b=20)
 )
 
 st.plotly_chart(fig, use_container_width=True)
+
+# 현재 시점 기준 요약 리포트
+latest_row = stock_df.iloc[-1]
+latest_price = latest_row['종가']
+latest_por = latest_row['수정_POR']
+latest_op = latest_row['수정_영업이익']
+
+st.markdown("---")
+st.subheader("💡 투자 지표 요약")
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("현재 주가", f"{latest_price:,.0f} 원")
+
+if pd.notnull(latest_por) and latest_por > 0:
+    m2.metric("현재 POR (2026 추정 기준)", f"{latest_por:.2f} 배")
+else:
+    m2.metric("현재 POR", "N/A (적자)")
+
+if pd.notnull(latest_op):
+    m3.metric("2026년 영업이익 추정", f"{latest_op / 100_000_000.0:,.1f} 억원")
+else:
+    m3.metric("2026년 영업이익 추정", "미입력")
+
+if not valid_por.empty:
+    m4.metric("과거 5년 POR 중앙값", f"{med_por_val:.2f} 배")
