@@ -15,12 +15,11 @@ import plotly.graph_objects as go
 import FinanceDataReader as fdr
 
 # 페이지 기본 설정
-st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
+st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
-# 🔑 KVdb 및 Open DART 설정
-KVDB_BUCKET_ID = "YOUR_KVDB_BUCKET_ID_HERE"
-KVDB_KEY = "por_stock_data"
+# 🔑 KVdb 및 Open DART 고정 설정
+KVDB_FULL_URL = "https://kvdb.io/MzdTavSteRuyBzBFpDorrt/scripts/por_stock_data"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
@@ -42,12 +41,8 @@ DEFAULT_STOCKS = {
 # --- 🔄 KVdb 로드 / 저장 함수 ---
 def load_stocks_data_from_kvdb():
     base_data = DEFAULT_STOCKS.copy()
-    if not KVDB_BUCKET_ID or KVDB_BUCKET_ID == "YOUR_KVDB_BUCKET_ID_HERE":
-        return base_data
-
-    url = f"https://kvdb.io/{KVDB_BUCKET_ID}/{KVDB_KEY}"
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(KVDB_FULL_URL, timeout=5)
         if res.status_code == 200:
             saved_data = res.json()
             for cat, stocks in saved_data.items():
@@ -70,13 +65,13 @@ def load_stocks_data_from_kvdb():
     return base_data
 
 def save_stocks_data_to_kvdb(data):
-    if not KVDB_BUCKET_ID or KVDB_BUCKET_ID == "YOUR_KVDB_BUCKET_ID_HERE":
-        st.sidebar.warning("⚠️ KVdb Bucket ID를 설정해야 저장됩니다.")
-        return False
-
-    url = f"https://kvdb.io/{KVDB_BUCKET_ID}/{KVDB_KEY}"
     try:
-        res = requests.post(url, data=json.dumps(data, ensure_ascii=False), headers={"Content-Type": "application/json"}, timeout=5)
+        res = requests.post(
+            KVDB_FULL_URL,
+            data=json.dumps(data, ensure_ascii=False),
+            headers={"Content-Type": "application/json"},
+            timeout=5
+        )
         if res.status_code in [200, 201]:
             return True
         else:
@@ -176,10 +171,6 @@ def fetch_operating_profit_dart(code, api_key):
 
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ KVdb 및 종목 관리")
-
-bucket_input = st.sidebar.text_input("📦 KVdb Bucket ID 입력", value=KVDB_BUCKET_ID if KVDB_BUCKET_ID != "YOUR_KVDB_BUCKET_ID_HERE" else "")
-if bucket_input:
-    KVDB_BUCKET_ID = bucket_input.strip()
 
 if st.sidebar.button("🔄 KVdb에서 데이터 불러오기"):
     st.session_state.stock_categories = load_stocks_data_from_kvdb()
