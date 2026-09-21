@@ -93,10 +93,9 @@ def get_krx_stock_list():
 
 krx_df = get_krx_stock_list()
 
-# --- ⚡ [최적화 1] DART 고유번호 매핑 로컬 파일 캐싱 ---
+# --- DART 고유번호 매핑 로컬 파일 캐싱 ---
 @st.cache_data(ttl=86400 * 30)
 def get_dart_corp_code_map(api_key):
-    # 로컬 JSON 파일이 이미 있으면 0.01초 만에 불러옴
     if os.path.exists(CORP_CODE_CACHE_FILE):
         try:
             with open(CORP_CODE_CACHE_FILE, 'r', encoding='utf-8') as f:
@@ -121,7 +120,6 @@ def get_dart_corp_code_map(api_key):
                     corp_code = list_item.findtext('corp_code', '').strip()
                     if stock_code and corp_code:
                         corp_map[stock_code.zfill(6)] = corp_code
-            # 파일로 저장하여 다음 실행 시 속도 향상
             with open(CORP_CODE_CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(corp_map, f)
     except Exception:
@@ -146,7 +144,7 @@ def _fetch_single_year_dart(args):
         pass
     return b_year, 0.0
 
-# --- ⚡ [최적화 2] DART 5년치 데이터 병렬 API 수집 ---
+# --- DART 5년치 데이터 병렬 API 수집 ---
 @st.cache_data(ttl=86400)
 def fetch_operating_profit_dart(code, api_key):
     ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
@@ -163,7 +161,6 @@ def fetch_operating_profit_dart(code, api_key):
     years = ['2021', '2022', '2023', '2024', '2025']
     tasks = [(yr, clean_key, corp_code) for yr in years]
 
-    # 5년치 요청을 동시에 병렬 실행 (속도 5배 향상)
     with ThreadPoolExecutor(max_workers=5) as executor:
         results = executor.map(_fetch_single_year_dart, tasks)
         for yr, val in results:
@@ -210,9 +207,45 @@ if st.sidebar.button("💾 전체 종목 구성 및 수치 저장", type="primar
     if save_stocks_data(st.session_state.stock_categories):
         st.sidebar.success("custom_stocks.json 저장 완료!")
 
+if DART_API_KEY == "YOUR_DART_API_KEY_HERE":
+    dart_key_input = st.sidebar.text_input("🔑 Open DART API 키 입력", type="password")
+    if dart_key_input:
+        DART_API_KEY = dart_key_input.strip()
+
+# --- 📁 카테고리 추가 ---
+with st.sidebar.expander("📁 카테고리 추가"):
+    new_cat_name = st.text_input("새 카테고리 이름", key="new_cat_input").strip()
+    if st.button("카테고리 생성"):
+        if new_cat_name and new_cat_name not in st.session_state.stock_categories:
+            st.session_state.stock_categories[new_cat_name] = {}
+            save_stocks_data(st.session_state.stock_categories)
+            st.success(f"'{new_cat_name}' 카테고리가 생성되었습니다.")
+            st.rerun()
+
+# --- ➕ 신규 종목 추가 (복구 완료) ---
+with st.sidebar.expander("➕ 신규 종목 추가"):
+    if not krx_df.empty:
+        search_options = [f"{row['Name']} ({row['Code']})" for _, row in krx_df.iterrows() if 'Name' in row and 'Code' in row]
+        selected_search = st.selectbox("KRX 종목 검색:", options=["선택하세요..."] + search_options)
+        target_cat = st.selectbox("추가할 카테고리 선택:", list(st.session_state.stock_categories.keys()))
+        
+        if st.button("종목 추가"):
+            if selected_search != "선택하세요...":
+                name = selected_search.split(" (")[0]
+                code = selected_search.split(" (")[1].replace(")", "")
+                
+                if target_cat in st.session_state.stock_categories:
+                    st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': {}}
+                    save_stocks_data(st.session_state.stock_categories)
+                    st.success(f"'{name}' 종목이 추가되었습니다!")
+                    st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.title("🔍 분석 대상 선택")
 category_list = [cat for cat, stocks in st.session_state.stock_categories.items() if stocks]
+
 if not category_list:
-    st.warning("등록된 종목이 없습니다.")
+    st.warning("등록된 종목이 없습니다. 카테고리나 종목을 추가해주세요.")
     st.stop()
 
 selected_category = st.sidebar.selectbox("카테고리 선택:", category_list)
@@ -222,12 +255,18 @@ selected_stock = st.sidebar.selectbox("종목 선택:", list(available_stocks.ke
 stock_info = available_stocks[selected_stock]
 stock_code = stock_info['code']
 
+if st.sidebar.button(f"❌ {selected_stock} 삭제"):
+    del st.session_state.stock_categories[selected_category][selected_stock]
+    save_stocks_data(st.session_state.stock_categories)
+    st.success(f"{selected_stock} 삭제 완료")
+    st.rerun()
+
 # ==================== 메인 화면 ====================
 st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드 시뮬레이션")
 
 past_years = ['2021', '2022', '2023', '2024', '2025']
 
-# ⚡ [최적화 3] 이미 저장된 값이 있다면 API 조회를 통째로 Skip
+# 이미 저장된 값이 있다면 API 조회를 통째로 Skip
 if selected_stock not in st.session_state.ops_data:
     saved_ops = stock_info.get('ops', {})
     st.session_state.ops_data[selected_stock] = {}
