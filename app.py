@@ -19,7 +19,7 @@ import FinanceDataReader as fdr
 st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
-# 🔑 고정 KVdb 엔드포인트 및 DART API 키 설정
+# 🔑 KVdb 엔드포인트 및 DART API 키
 KVDB_URL = "https://kvdb.io/MzdTavSteRuyBzBFpDorrt/scripts/por_stock_data"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
@@ -39,53 +39,48 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- 🔄 KVdb 동기화 함수 (LOAD & SAVE) ---
+# --- 🔄 KVdb 네트워크 로직 ---
 def load_stocks_data_from_kvdb():
-    base_data = copy.deepcopy(DEFAULT_STOCKS)
     try:
         res = requests.get(KVDB_URL, timeout=5)
         if res.status_code == 200 and res.text.strip():
-            try:
-                saved_data = res.json()
-                if isinstance(saved_data, dict) and len(saved_data) > 0:
-                    loaded_categories = {}
-                    for cat, stocks in saved_data.items():
-                        loaded_categories[cat] = {}
-                        if isinstance(stocks, dict):
-                            for name, val in stocks.items():
-                                if isinstance(val, dict):
-                                    code = val.get('code', '')
-                                    ops = val.get('ops', {})
-                                else:
-                                    code = str(val)
-                                    ops = {}
-                                loaded_categories[cat][name] = {'code': code, 'ops': ops}
-                    return loaded_categories
-            except json.JSONDecodeError:
-                pass
-    except Exception as e:
-        st.sidebar.warning(f"KVdb 연결 오류 (기본값 로드): {e}")
-    return base_data
+            saved_data = res.json()
+            if isinstance(saved_data, dict) and len(saved_data) > 0:
+                cleaned_data = {}
+                for cat, stocks in saved_data.items():
+                    cleaned_data[cat] = {}
+                    if isinstance(stocks, dict):
+                        for name, val in stocks.items():
+                            if isinstance(val, dict):
+                                code = val.get('code', '')
+                                ops = val.get('ops', {})
+                            else:
+                                code = str(val)
+                                ops = {}
+                            cleaned_data[cat][name] = {'code': code, 'ops': ops}
+                return cleaned_data
+    except Exception:
+        pass
+    return copy.deepcopy(DEFAULT_STOCKS)
 
 def save_stocks_data_to_kvdb(data):
     try:
-        payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
-        headers = {"Content-Type": "application/json; charset=utf-8"}
-        res = requests.post(KVDB_URL, data=payload, headers=headers, timeout=5)
-        if res.status_code in [200, 201]:
-            return True
-        else:
-            st.sidebar.error(f"KVdb 저장 실패 (응답코드: {res.status_code})")
-            return False
-    except Exception as e:
-        st.sidebar.error(f"KVdb 저장 중 오류: {e}")
+        json_payload = json.dumps(data, ensure_ascii=False)
+        res = requests.post(
+            KVDB_URL, 
+            data=json_payload.encode('utf-8'), 
+            headers={"Content-Type": "application/json; charset=utf-8"}, 
+            timeout=5
+        )
+        return res.status_code in [200, 201]
+    except Exception:
         return False
 
-# Session State 초기화
+# Session State 초기화 (최초 1회)
 if 'stock_categories' not in st.session_state:
     st.session_state.stock_categories = load_stocks_data_from_kvdb()
 
-# KRX 상장 종목 데이터 (캐싱)
+# KRX 상장 종목 데이터
 @st.cache_data(ttl=86400)
 def get_krx_stock_list():
     try:
@@ -95,12 +90,12 @@ def get_krx_stock_list():
 
 krx_df = get_krx_stock_list()
 
-# --- DART 고유번호 매핑 메모리 캐싱 ---
+# DART 매핑
 @st.cache_data(ttl=86400 * 30)
 def get_dart_corp_code_map(api_key):
     corp_map = {}
     clean_key = str(api_key).strip()
-    if not clean_key or clean_key == "YOUR_DART_API_KEY_HERE":
+    if not clean_key:
         return corp_map
     
     url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={clean_key}"
@@ -119,7 +114,6 @@ def get_dart_corp_code_map(api_key):
         pass
     return corp_map
 
-# 단일 연도 DART API 호출
 def _fetch_single_year_dart(args):
     b_year, clean_key, corp_code = args
     try:
@@ -137,13 +131,11 @@ def _fetch_single_year_dart(args):
         pass
     return b_year, 0.0
 
-# --- DART 5년치 데이터 병렬 API 수집 ---
 @st.cache_data(ttl=86400)
 def fetch_operating_profit_dart(code, api_key):
     ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
     clean_key = str(api_key).strip()
-    
-    if not clean_key or clean_key == "YOUR_DART_API_KEY_HERE":
+    if not clean_key:
         return ops
 
     corp_map = get_dart_corp_code_map(clean_key)
@@ -161,283 +153,228 @@ def fetch_operating_profit_dart(code, api_key):
 
     return ops
 
-# --- 올해 추정 영업이익 (네이버 컨센서스) ---
 @st.cache_data(ttl=3600)
 def fetch_consensus_operating_profit(code):
     consensus = {'2026': 0.0}
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0'}
     url = f"https://finance.naver.com/item/coinfoExecutionGrid.naver?code={code}&target=annual"
-    
     try:
         res = requests.get(url, headers=headers, timeout=3)
         if res.status_code == 200:
             tables = pd.read_html(io.StringIO(res.text))
             for tbl in tables:
-                tbl_str = tbl.to_string()
-                if '영업이익' in tbl_str:
+                if '영업이익' in tbl.to_string():
                     for idx, row in tbl.iterrows():
-                        row_title = str(row.iloc[0])
-                        if '영업이익' in row_title and '률' not in row_title:
+                        if '영업이익' in str(row.iloc[0]) and '률' not in str(row.iloc[0]):
                             for col_idx in range(1, len(tbl.columns)):
-                                col_hdr = str(tbl.columns[col_idx])
-                                val = row.iloc[col_idx]
-                                if '2026' in col_hdr and pd.notnull(val):
-                                    clean_v = re.sub(r'[^0-9.-]', '', str(val))
+                                if '2026' in str(tbl.columns[col_idx]) and pd.notnull(row.iloc[col_idx]):
+                                    clean_v = re.sub(r'[^0-9.-]', '', str(row.iloc[col_idx]))
                                     if clean_v and clean_v != '-':
                                         consensus['2026'] = float(clean_v)
                                         return consensus
     except Exception:
         pass
-            
     return consensus
 
-# 종목 전체 실적(과거+2026년 추정) 일괄 로드 함수
 def get_full_stock_ops(code):
     past_years = ['2021', '2022', '2023', '2024', '2025']
     hist_ops = fetch_operating_profit_dart(code, DART_API_KEY)
     est_ops = fetch_consensus_operating_profit(code)
     
-    full_ops = {}
-    for yr in past_years:
-        full_ops[yr] = float(hist_ops.get(yr, 0.0))
+    full_ops = {yr: float(hist_ops.get(yr, 0.0)) for yr in past_years}
     full_ops['2026'] = float(est_ops.get('2026', 0.0))
     return full_ops
 
 # ==================== 사이드바 ====================
-st.sidebar.title("⚙️ KVdb 및 종목 관리")
+st.sidebar.title("⚙️ 데이터 동기화 관리")
 
-col_btn1, col_btn2 = st.sidebar.columns(2)
-with col_btn1:
+btn_col1, btn_col2 = st.sidebar.columns(2)
+with btn_col1:
     if st.button("🔄 불러오기", use_container_width=True):
         st.session_state.stock_categories = load_stocks_data_from_kvdb()
-        st.sidebar.success("KVdb 데이터 로드 완료!")
+        st.sidebar.success("서버 데이터 로드 완료")
         st.rerun()
 
-with col_btn2:
-    if st.button("💾 동기화 저장", type="primary", use_container_width=True):
+with btn_col2:
+    if st.button("💾 강제 저장", type="primary", use_container_width=True):
         if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-            st.sidebar.success("KVdb 동기화 완료!")
+            st.sidebar.success("KVdb 저장 성공!")
+        else:
+            st.sidebar.error("저장 실패 (네트워크 확인)")
 
-# --- 📁 카테고리 추가 ---
+st.sidebar.markdown("---")
+
+# 1. 카테고리 추가
 with st.sidebar.expander("📁 카테고리 추가"):
-    new_cat_name = st.text_input("새 카테고리 이름", key="new_cat_input").strip()
-    if st.button("카테고리 생성", use_container_width=True):
-        if new_cat_name:
-            if new_cat_name not in st.session_state.stock_categories:
-                st.session_state.stock_categories[new_cat_name] = {}
-                save_stocks_data_to_kvdb(st.session_state.stock_categories)
-                st.success(f"'{new_cat_name}' 카테고리 생성 및 저장 완료!")
-                st.rerun()
+    new_cat = st.text_input("카테고리명").strip()
+    if st.button("카테고리 추가"):
+        if new_cat and new_cat not in st.session_state.stock_categories:
+            st.session_state.stock_categories[new_cat] = {}
+            save_stocks_data_to_kvdb(st.session_state.stock_categories)
+            st.rerun()
 
-# --- ➕ 신규 종목 추가 ---
-with st.sidebar.expander("➕ 신규 종목 추가", expanded=True):
+# 2. 종목 추가
+with st.sidebar.expander("➕ 종목 추가", expanded=True):
     if not krx_df.empty:
-        search_options = [f"{row['Name']} ({row['Code']})" for _, row in krx_df.iterrows() if 'Name' in row and 'Code' in row]
-        selected_search = st.selectbox("KRX 종목 검색:", options=["선택하세요..."] + search_options)
+        stock_list = [f"{r['Name']} ({r['Code']})" for _, r in krx_df.iterrows() if 'Name' in r and 'Code' in r]
+        selected_item = st.selectbox("종목 검색", ["선택하세요..."] + stock_list)
         
-        cat_keys = list(st.session_state.stock_categories.keys())
-        if not cat_keys:
+        cats = list(st.session_state.stock_categories.keys())
+        if not cats:
             st.session_state.stock_categories['관심종목'] = {}
-            cat_keys = ['관심종목']
-            
-        target_cat = st.selectbox("추가할 카테고리 선택:", cat_keys)
+            cats = ['관심종목']
         
-        if st.button("종목 추가 및 KVdb 저장", type="primary", use_container_width=True):
-            if selected_search != "선택하세요...":
-                name = selected_search.split(" (")[0]
-                code = selected_search.split(" (")[1].replace(")", "")
+        target_c = st.selectbox("저장할 카테고리", cats)
+        
+        if st.button("종목 추가 및 KVdb 즉시 저장", type="primary", use_container_width=True):
+            if selected_item != "선택하세요...":
+                s_name = selected_item.split(" (")[0]
+                s_code = selected_item.split(" (")[1].replace(")", "")
                 
-                # 실적 데이터 수집
-                with st.spinner("실적 데이터를 가져오는 중..."):
-                    initial_ops = get_full_stock_ops(code)
+                with st.spinner("실적 데이터 수집 중..."):
+                    s_ops = get_full_stock_ops(s_code)
                 
-                # 세션 데이터 업데이트
-                st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': initial_ops}
+                # 메모리 등록
+                st.session_state.stock_categories[target_c][s_name] = {'code': s_code, 'ops': s_ops}
                 
-                # KVdb 즉시 자동 동기화 저장
-                if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-                    st.success(f"✅ '{name}' 종목이 추가되고 KVdb에 저장되었습니다!")
+                # KVdb 동기화
+                ok = save_stocks_data_to_kvdb(st.session_state.stock_categories)
+                if ok:
+                    st.sidebar.success(f"'{s_name}' 저장 완료!")
                 else:
-                    st.warning("⚠️ 세션에는 추가되었으나 KVdb 저장에 실패했습니다.")
+                    st.sidebar.warning("메모리에 추가되었으나 KVdb 저장 실패")
                 st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.title("🔍 분석 대상 선택")
 
-# 종목이 들어 있는 카테고리 목록
-category_list = [cat for cat, stocks in st.session_state.stock_categories.items() if len(stocks) > 0]
+# 종목 선택
+valid_cats = [c for c, s in st.session_state.stock_categories.items() if len(s) > 0]
 
-if not category_list:
-    st.warning("등록된 종목이 없습니다. 사이드바에서 종목을 추가해 주세요.")
+if not valid_cats:
+    st.info("등록된 종목이 없습니다. 사이드바에서 종목을 추가해 주세요.")
     st.stop()
 
-selected_category = st.sidebar.selectbox("카테고리 선택:", category_list)
-available_stocks = st.session_state.stock_categories[selected_category]
-selected_stock = st.sidebar.selectbox("종목 선택:", list(available_stocks.keys()))
+sel_cat = st.sidebar.selectbox("카테고리", valid_cats)
+sel_stock = st.sidebar.selectbox("종목", list(st.session_state.stock_categories[sel_cat].keys()))
 
-stock_info = available_stocks[selected_stock]
-stock_code = stock_info['code']
+cur_code = st.session_state.stock_categories[sel_cat][sel_stock]['code']
 
-if st.sidebar.button(f"❌ {selected_stock} 삭제", use_container_width=True):
-    del st.session_state.stock_categories[selected_category][selected_stock]
+if st.sidebar.button(f"🗑️ {sel_stock} 삭제", use_container_width=True):
+    del st.session_state.stock_categories[sel_cat][sel_stock]
     save_stocks_data_to_kvdb(st.session_state.stock_categories)
-    st.sidebar.info(f"{selected_stock} 삭제 완료")
     st.rerun()
 
 # ==================== 메인 화면 ====================
-st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드 시뮬레이션")
+st.title(f"📈 [{sel_cat}] {sel_stock} ({cur_code}) POR 밴드 분석")
+
+cur_ops = st.session_state.stock_categories[sel_cat][sel_stock].get('ops', {})
+
+# 실적 실시간 수정 콜백
+def on_op_change(c, s, y):
+    val = st.session_state[f"input_{s}_{y}"]
+    st.session_state.stock_categories[c][s]['ops'][y] = val
+    save_stocks_data_to_kvdb(st.session_state.stock_categories)
 
 past_years = ['2021', '2022', '2023', '2024', '2025']
-saved_ops = stock_info.get('ops', {})
-
-# 저장된 영업이익 데이터가 없거나 2026년 추정치가 빠진 경우 자동 보완
-if not saved_ops or '2026' not in saved_ops:
-    saved_ops = get_full_stock_ops(stock_code)
-    st.session_state.stock_categories[selected_category][selected_stock]['ops'] = saved_ops
-    save_stocks_data_to_kvdb(st.session_state.stock_categories)
-
-st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
+st.subheader("📊 연도별 영업이익 (단위: 억원)")
 
 final_ops = {}
-p_cols = st.columns(len(past_years))
-has_negative_op = False
-
-# 실적/추정치 입력값 변경 시 KVdb 실시간 자동 반영 콜백
-def update_op_value(cat, stock, yr):
-    widget_key = f"input_{stock}_{yr}"
-    new_val = st.session_state[widget_key]
-    st.session_state.stock_categories[cat][stock]['ops'][yr] = new_val
-    save_stocks_data_to_kvdb(st.session_state.stock_categories)
+cols = st.columns(6)
 
 for idx, yr in enumerate(past_years):
-    current_val = float(saved_ops.get(yr, 0.0))
-    with p_cols[idx]:
-        val_input = st.number_input(
-            f"{yr}년 실적(억원)",
-            value=current_val,
-            step=10.0,
-            format="%.1f",
-            key=f"input_{selected_stock}_{yr}",
-            on_change=update_op_value,
-            args=(selected_category, selected_stock, yr)
+    val = float(cur_ops.get(yr, 0.0))
+    with cols[idx]:
+        v_in = st.number_input(
+            f"{yr}년", value=val, step=10.0, format="%.1f",
+            key=f"input_{sel_stock}_{yr}",
+            on_change=on_op_change, args=(sel_cat, sel_stock, yr)
         )
-        final_ops[yr] = val_input * 100_000_000.0
-        
-        if val_input < 0:
-            st.markdown(f"<p style='color: #FF4B4B; font-weight: bold; margin-top: -10px;'>🔴 {val_input:,.1f} 억 (적자)</p>", unsafe_allow_html=True)
-            has_negative_op = True
-        else:
-            st.markdown(f"<p style='color: #00C853; font-size: 0.85em; margin-top: -10px;'>🟢 흑자</p>", unsafe_allow_html=True)
+        final_ops[yr] = v_in * 100_000_000.0
 
-f_cols = st.columns(4)
-with f_cols[0]:
-    val_2026 = float(saved_ops.get('2026', 0.0))
-    input_2026 = st.number_input(
-        "2026년 추정(억원)", 
-        value=val_2026, 
-        step=10.0, 
-        format="%.1f",
-        key=f"input_{selected_stock}_2026",
-        on_change=update_op_value,
-        args=(selected_category, selected_stock, '2026')
+with cols[5]:
+    val_26 = float(cur_ops.get('2026', 0.0))
+    v_in_26 = st.number_input(
+        "2026년(추정)", value=val_26, step=10.0, format="%.1f",
+        key=f"input_{sel_stock}_2026",
+        on_change=on_op_change, args=(sel_cat, sel_stock, '2026')
     )
-    final_ops['2026'] = input_2026 * 100_000_000.0
-    
-    if input_2026 < 0:
-        st.markdown(f"<p style='color: #FF4B4B; font-weight: bold; margin-top: -10px;'>🔴 {input_2026:,.1f} 억 (적자 추정)</p>", unsafe_allow_html=True)
-        has_negative_op = True
-    else:
-        st.markdown(f"<p style='color: #00C853; font-size: 0.85em; margin-top: -10px;'>🟢 흑자 추정</p>", unsafe_allow_html=True)
+    final_ops['2026'] = v_in_26 * 100_000_000.0
 
-if has_negative_op:
-    st.warning("⚠️ 영업이익이 적자(마이너스)인 구간은 POR 산출 공식상 'N/A' 처리되어 차트선이 연결되지 않을 수 있습니다.")
-
-# ==================== 주가 데이터 수집 ====================
-end_date = datetime.today()
-start_date = datetime(end_date.year - 5, 1, 1)
+# 주가 데이터 처리 및 차트
+end_d = datetime.today()
+start_d = datetime(end_d.year - 5, 1, 1)
 
 @st.cache_data(ttl=3600)
-def get_stock_data_api(code, start, end):
-    df = fdr.DataReader(code, start=start.strftime('%Y-%m-%d'), end=end.strftime('%Y-%m-%d'))
-    return df.reset_index()
+def load_price_data(code, start, end):
+    return fdr.DataReader(code, start=start.strftime('%Y-%m-%d'), end=end.strftime('%Y-%m-%d')).reset_index()
 
 try:
-    stock_df = get_stock_data_api(stock_code, start_date, end_date)
+    df_price = load_price_data(cur_code, start_d, end_d)
 except Exception as e:
-    st.error(f"주가 데이터 불러오기 실패: {e}")
+    st.error(f"주가 로드 실패: {e}")
     st.stop()
 
-if stock_df.empty:
-    st.error("불러온 주가 데이터가 없습니다.")
+if df_price.empty:
+    st.error("주가 데이터가 존재하지 않습니다.")
     st.stop()
 
-# Dataframe 가공 및 시가총액 계산
-stock_df['날짜'] = pd.to_datetime(stock_df['Date'])
-stock_df['종가'] = pd.to_numeric(stock_df['Close'], errors='coerce')
-stock_df['연도'] = stock_df['날짜'].dt.year.astype(str)
+df_price['날짜'] = pd.to_datetime(df_price['Date'])
+df_price['종가'] = pd.to_numeric(df_price['Close'], errors='coerce')
+df_price['연도'] = df_price['날짜'].dt.year.astype(str)
 
-if 'Marcap' in stock_df.columns and stock_df['Marcap'].notnull().sum() > 0:
-    stock_df['시가총액'] = pd.to_numeric(stock_df['Marcap'], errors='coerce')
+if 'Marcap' in df_price.columns and df_price['Marcap'].notnull().sum() > 0:
+    df_price['시가총액'] = pd.to_numeric(df_price['Marcap'], errors='coerce')
 else:
     shares = 0
     if not krx_df.empty and 'Code' in krx_df.columns:
-        matched = krx_df[krx_df['Code'] == stock_code]
-        if not matched.empty:
-            for col_name in ['Stocks', 'ListingShares', 'Shares']:
-                if col_name in matched.columns and pd.notnull(matched[col_name].values[0]):
-                    shares = float(matched[col_name].values[0])
-                    if shares > 0:
-                        break
-    stock_df['시가총액'] = stock_df['종가'] * shares if shares > 0 else np.nan
+        m = krx_df[krx_df['Code'] == cur_code]
+        if not m.empty:
+            for col_n in ['Stocks', 'ListingShares', 'Shares']:
+                if col_n in m.columns and pd.notnull(m[col_n].values[0]):
+                    shares = float(m[col_n].values[0])
+                    break
+    df_price['시가총액'] = df_price['종가'] * shares if shares > 0 else np.nan
 
-stock_df['수정_영업이익'] = stock_df['연도'].map(final_ops)
-stock_df['수정_영업이익'] = pd.to_numeric(stock_df['수정_영업이익'], errors='coerce')
-
-# POR 계산
-stock_df['수정_POR'] = np.where(
-    (stock_df['수정_영업이익'].notnull()) & (stock_df['수정_영업이익'] > 0) & (stock_df['시가총액'].notnull()),
-    stock_df['시가총액'] / stock_df['수정_영업이익'],
+df_price['영업이익'] = df_price['연도'].map(final_ops)
+df_price['POR'] = np.where(
+    (df_price['영업이익'] > 0) & (df_price['시가총액'].notnull()),
+    df_price['시가총액'] / df_price['영업이익'],
     np.nan
 )
 
-valid_por = stock_df['수정_POR'].dropna()
+valid_por = df_price['POR'].dropna()
 mean_val = valid_por.mean() if len(valid_por) > 0 else 0.0
 std_val = valid_por.std() if len(valid_por) > 0 else 0.0
 
-stock_df['Mean'] = mean_val
-stock_df['+1σ'] = mean_val + std_val
-stock_df['+2σ'] = mean_val + (std_val * 2)
-stock_df['-1σ'] = mean_val - std_val
-stock_df['-2σ'] = mean_val - (std_val * 2)
+df_price['Mean'] = mean_val
+df_price['+1σ'] = mean_val + std_val
+df_price['+2σ'] = mean_val + (std_val * 2)
+df_price['-1σ'] = mean_val - std_val
+df_price['-2σ'] = mean_val - (std_val * 2)
 
-c1, c2, c3, c4, c5 = st.columns(5)
-latest_close = stock_df['종가'].iloc[-1] if not stock_df.empty else 0
-latest_marcap_val = stock_df['시가총액'].dropna().iloc[-1] if not stock_df['시가총액'].dropna().empty else 0
+c1, c2, c3, c4 = st.columns(4)
+l_close = df_price['종가'].iloc[-1]
+l_marcap = df_price['시가총액'].dropna().iloc[-1] if not df_price['시가총액'].dropna().empty else 0
 
-c1.metric("최신 종가", f"{latest_close:,.0f} 원")
-c2.metric("현재 시가총액", f"{latest_marcap_val / 100_000_000:,.1f} 억원" if latest_marcap_val > 0 else "N/A")
-c3.metric(f"평균 POR ({start_date.year}~현재)", f"{mean_val:.2f}")
+c1.metric("최신 종가", f"{l_close:,.0f} 원")
+c2.metric("시가총액", f"{l_marcap / 100_000_000:,.1f} 억원" if l_marcap > 0 else "N/A")
+c3.metric("평균 POR", f"{mean_val:.2f}")
 c4.metric("표준편차 (STDEV)", f"{std_val:.2f}")
-c5.metric("+2σ 밴드 상단", f"{(mean_val + std_val*2):.2f}")
 
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['수정_POR'], mode='lines', name='POR (실시간)', line=dict(color='#FFFFFF', width=2)))
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['+2σ'], mode='lines', name='+2σ (상단)', line=dict(color='#FF5555', width=1.5, dash='dash')))
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['+1σ'], mode='lines', name='+1σ', line=dict(color='#FFB86C', width=1.5, dash='dot')))
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['Mean'], mode='lines', name='Mean (평균)', line=dict(color='#50FA7B', width=2, dash='solid')))
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['-1σ'], mode='lines', name='-1σ', line=dict(color='#8BE9FD', width=1.5, dash='dot')))
-fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['-2σ'], mode='lines', name='-2σ (하단)', line=dict(color='#BD93F9', width=1.5, dash='dash')))
+fig.add_trace(go.Scatter(x=df_price['날짜'], y=df_price['POR'], mode='lines', name='POR', line=dict(color='#FFFFFF', width=2)))
+fig.add_trace(go.Scatter(x=df_price['날짜'], y=df_price['+2σ'], mode='lines', name='+2σ', line=dict(color='#FF5555', width=1.5, dash='dash')))
+fig.add_trace(go.Scatter(x=df_price['날짜'], y=df_price['+1σ'], mode='lines', name='+1σ', line=dict(color='#FFB86C', width=1.5, dash='dot')))
+fig.add_trace(go.Scatter(x=df_price['날짜'], y=df_price['Mean'], mode='lines', name='Mean', line=dict(color='#50FA7B', width=2, dash='solid')))
+fig.add_trace(go.Scatter(x=df_price['날짜'], y=df_price['-1σ'], mode='lines', name='-1σ', line=dict(color='#8BE9FD', width=1.5, dash='dot')))
+fig.add_trace(go.Scatter(x=df_price['날짜'], y=df_price['-2σ'], mode='lines', name='-2σ', line=dict(color='#BD93F9', width=1.5, dash='dash')))
 
 fig.update_layout(
-    title=dict(text=f"<b>{selected_stock} {start_date.year}년 1월 ~ 현재 POR 밴드 차트</b>", font=dict(color='#FFFFFF', size=20)),
-    paper_bgcolor='#1E1E1E',
-    plot_bgcolor='#141414',
+    title=f"<b>{sel_stock} POR 밴드 차트</b>",
+    paper_bgcolor='#1E1E1E', plot_bgcolor='#141414',
     font=dict(color='#FFFFFF'),
-    xaxis=dict(title="날짜", showgrid=True, gridcolor='#333333', color='#FFFFFF'),
-    yaxis=dict(title="POR", showgrid=True, gridcolor='#333333', color='#FFFFFF'),
-    hovermode="x unified",
-    height=600,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color='#FFFFFF'))
+    xaxis=dict(gridcolor='#333333'), yaxis=dict(gridcolor='#333333'),
+    hovermode="x unified", height=550
 )
 
 st.plotly_chart(fig, use_container_width=True)
