@@ -25,9 +25,9 @@ CORP_CODE_CACHE_FILE = os.path.join(BASE_DIR, 'corp_code_map.json')
 # 🔑 Open DART API 키 설정
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 
-# 🌐 계정 없이 사용하는 노-회원가입 오픈 저장소 설정
-# 다른 사람과 겹치지 않는 고유한 URL 경로로 변경하세요.
-SHARED_STORE_URL = "https://jsonbin.org/my_por_simulator_stocks_v1"
+# 🌐 회원가입 없는 오픈 키-값 저장소 (kvdb.io)
+# 남들과 중복되지 않도록 본인만의 고유한 키 이름(예: my_por_data_krx_9981)으로 지정하세요.
+SHARED_STORE_URL = "https://kvdb.io/bucket_por_app_free/my_por_data_krx_9981"
 # ==========================================
 
 DEFAULT_STOCKS = {
@@ -45,10 +45,9 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- 🌐 캐시 방지 적용 오픈 공유 저장소 로드/저장 로직 ---
+# --- 🌐 kvdb.io 저장소 로드/저장 로직 ---
 def load_stocks_data_public():
     try:
-        # 타임스탬프를 붙여 캐시된 응답을 방지합니다.
         fetch_url = f"{SHARED_STORE_URL}?_t={int(time.time())}"
         res = requests.get(fetch_url, timeout=5)
         if res.status_code == 200:
@@ -62,13 +61,18 @@ def load_stocks_data_public():
 def save_stocks_data_public(data):
     try:
         headers = {"Content-Type": "application/json"}
-        res = requests.post(SHARED_STORE_URL, json=data, headers=headers, timeout=5)
-        return res.status_code in [200, 201]
+        # kvdb.io는 POST 또는 PUT을 통해 JSON 데이터를 바로 업데이트할 수 있습니다.
+        res = requests.post(SHARED_STORE_URL, data=json.dumps(data, ensure_ascii=False).encode('utf-8'), headers=headers, timeout=5)
+        if res.status_code in [200, 201, 204]:
+            return True
+        else:
+            st.sidebar.error(f"저장 실패 (응답 코드: {res.status_code})")
+            return False
     except Exception as e:
         st.sidebar.error(f"공유 저장 중 오류: {e}")
         return False
 
-# Session State 초기화 (앱 시작/새로고침 시 저장소에서 불러오기)
+# Session State 초기화
 if 'stock_categories' not in st.session_state:
     st.session_state.stock_categories = load_stocks_data_public()
 
@@ -194,15 +198,13 @@ st.sidebar.title("⚙️ 카테고리 & 종목 관리")
 
 if st.sidebar.button("🔄 공유 데이터 다시 불러오기"):
     st.session_state.stock_categories = load_stocks_data_public()
-    st.session_state.ops_data = {} # ops_data 초기화하여 원본에서 다시 로드
+    st.session_state.ops_data = {}
     st.sidebar.success("최신 데이터 동기화 완료!")
     st.rerun()
 
 if st.sidebar.button("💾 변경사항 전체 공유 저장", type="primary"):
     if save_stocks_data_public(st.session_state.stock_categories):
-        st.sidebar.success("공유 저장소에 저장 완료!")
-    else:
-        st.sidebar.error("저장 실패!")
+        st.sidebar.success("공유 저장소에 성공적으로 저장되었습니다!")
 
 if DART_API_KEY == "YOUR_DART_API_KEY_HERE":
     dart_key_input = st.sidebar.text_input("🔑 Open DART API 키 입력", type="password")
@@ -263,13 +265,12 @@ st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드
 
 past_years = ['2021', '2022', '2023', '2024', '2025']
 
-# 저장된 ops 데이터 우선 불러오기 로직
 saved_ops = stock_info.get('ops', {})
 
 if selected_stock not in st.session_state.ops_data:
     st.session_state.ops_data[selected_stock] = {}
     
-    # 1. 과거 실적 (저장된 값 우선 체크)
+    # 1. 과거 실적
     hist_ops = None
     for yr in past_years:
         if yr in saved_ops and saved_ops[yr] != 0.0:
@@ -279,7 +280,7 @@ if selected_stock not in st.session_state.ops_data:
                 hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
             st.session_state.ops_data[selected_stock][yr] = float(hist_ops.get(yr, 0.0) / 100_000_000.0)
             
-    # 2. 2026년 추정치 (저장된 값 우선 체크)
+    # 2. 2026년 추정치
     if '2026' in saved_ops and saved_ops['2026'] != 0.0:
         st.session_state.ops_data[selected_stock]['2026'] = float(saved_ops['2026'])
     else:
@@ -302,7 +303,6 @@ for idx, yr in enumerate(past_years):
             format="%.1f",
             key=f"input_past_{selected_stock}_{yr}"
         )
-        # 세션 및 카테고리 딕셔너리에 즉시 반영
         st.session_state.ops_data[selected_stock][yr] = val_input
         st.session_state.stock_categories[selected_category][selected_stock]['ops'][yr] = val_input
         final_ops[yr] = val_input * 100_000_000.0
@@ -335,10 +335,7 @@ with f_cols[0]:
 if has_negative_op:
     st.warning("⚠️ 영업이익이 적자(마이너스)인 구간은 POR 산출 공식상 'N/A' 처리되어 차트선이 연결되지 않을 수 있습니다.")
 
-# 수정한 값 자동 공유 저장 (선택 사항: 숫자를 바꿀 때마다 자동으로 서버에 저장)
-save_stocks_data_public(st.session_state.stock_categories)
-
-# ==================== 주가 데이터 수집 ====================
+# 주가 데이터 처리 및 차트 생성 부분 (기존 동일)
 end_date = datetime.today()
 start_date = datetime(end_date.year - 5, 1, 1)
 
@@ -357,7 +354,6 @@ if stock_df.empty:
     st.error("불러온 주가 데이터가 없습니다.")
     st.stop()
 
-# Dataframe 가공 및 시가총액 계산
 stock_df['날짜'] = pd.to_datetime(stock_df['Date'])
 stock_df['종가'] = pd.to_numeric(stock_df['Close'], errors='coerce')
 stock_df['연도'] = stock_df['날짜'].dt.year.astype(str)
