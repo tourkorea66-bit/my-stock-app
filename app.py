@@ -25,9 +25,9 @@ CORP_CODE_CACHE_FILE = os.path.join(BASE_DIR, 'corp_code_map.json')
 # 🔑 Open DART API 키 설정
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 
-# 🌐 회원가입 없는 오픈 키-값 저장소 (kvdb.io)
-# 남들과 중복되지 않도록 본인만의 고유한 키 이름(예: my_por_data_krx_9981)으로 지정하세요.
-SHARED_STORE_URL = "https://kvdb.io/15NbjVXrgfHXm7L76LPHPn/"
+# 🌐 kvdb.io 버킷 URL + 데이터 Key 이름 명시 (수정 완료)
+# 맨 뒤에 'por_stock_data'와 같이 키 이름을 반드시 지정해야 정상 저장이 됩니다.
+SHARED_STORE_URL = "https://kvdb.io/15NbjVXrgfHXm7L76LPHPn/por_stock_data"
 # ==========================================
 
 DEFAULT_STOCKS = {
@@ -61,8 +61,13 @@ def load_stocks_data_public():
 def save_stocks_data_public(data):
     try:
         headers = {"Content-Type": "application/json"}
-        # kvdb.io는 POST 또는 PUT을 통해 JSON 데이터를 바로 업데이트할 수 있습니다.
-        res = requests.post(SHARED_STORE_URL, data=json.dumps(data, ensure_ascii=False).encode('utf-8'), headers=headers, timeout=5)
+        # kvdb.io는 덮어쓰기 및 업데이트 시 PUT 메서드가 가장 안정적입니다.
+        res = requests.put(
+            SHARED_STORE_URL, 
+            data=json.dumps(data, ensure_ascii=False).encode('utf-8'), 
+            headers=headers, 
+            timeout=5
+        )
         if res.status_code in [200, 201, 204]:
             return True
         else:
@@ -335,7 +340,7 @@ with f_cols[0]:
 if has_negative_op:
     st.warning("⚠️ 영업이익이 적자(마이너스)인 구간은 POR 산출 공식상 'N/A' 처리되어 차트선이 연결되지 않을 수 있습니다.")
 
-# 주가 데이터 처리 및 차트 생성 부분 (기존 동일)
+# 주가 데이터 처리 및 차트 생성
 end_date = datetime.today()
 start_date = datetime(end_date.year - 5, 1, 1)
 
