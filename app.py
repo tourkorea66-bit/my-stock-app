@@ -18,12 +18,15 @@ import FinanceDataReader as fdr
 st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-JSON_FILE = os.path.join(BASE_DIR, 'custom_stocks.json')
 CORP_CODE_CACHE_FILE = os.path.join(BASE_DIR, 'corp_code_map.json')
 
 # ==========================================
 # 🔑 Open DART API 키 설정
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
+
+# 🌐 계정 없이 사용하는 노-회원가입 오픈 저장소 설정
+# 다른 사람이 예상하기 힘든 본인만의 고유한 주소 이름(예: my_por_simulator_9981)으로 변경하세요.
+SHARED_STORE_URL = "https://jsonbin.org/my_por_simulator_stocks_v1"
 # ==========================================
 
 DEFAULT_STOCKS = {
@@ -41,48 +44,28 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- 🔄 JSON 로드/병합 로직 ---
-def load_stocks_data():
-    base_data = DEFAULT_STOCKS.copy()
-    if os.path.exists(JSON_FILE):
-        try:
-            with open(JSON_FILE, 'r', encoding='utf-8') as f:
-                saved_data = json.load(f)
-                
-                for cat, stocks in saved_data.items():
-                    if cat not in base_data:
-                        base_data[cat] = {}
-                    for name, val in stocks.items():
-                        if isinstance(val, dict):
-                            code = val.get('code', '')
-                            ops = val.get('ops', {})
-                        elif isinstance(val, list):
-                            code = val[0]
-                            ops = {}
-                        else:
-                            code = str(val)
-                            ops = {}
-                        base_data[cat][name] = {'code': code, 'ops': ops}
-                return base_data
-        except Exception as e:
-            st.sidebar.error(f"설정 파일 읽기 오류: {e}")
-            return base_data
-    else:
-        save_stocks_data(base_data)
-        return base_data
-
-def save_stocks_data(data):
+# --- 🌐 오픈 공유 저장소 로드/저장 로직 (no-signup) ---
+def load_stocks_data_public():
     try:
-        with open(JSON_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-        return True
+        res = requests.get(SHARED_STORE_URL, timeout=5)
+        if res.status_code == 200 and res.json():
+            return res.json()
+    except Exception:
+        pass
+    return DEFAULT_STOCKS.copy()
+
+def save_stocks_data_public(data):
+    try:
+        headers = {"Content-Type": "application/json"}
+        res = requests.post(SHARED_STORE_URL, json=data, headers=headers, timeout=5)
+        return res.status_code in [200, 201]
     except Exception as e:
-        st.sidebar.error(f"종목 저장 중 오류 발생: {e}")
+        st.sidebar.error(f"공유 저장 중 오류: {e}")
         return False
 
-# Session State 초기화 및 파일 기반 자동 로드
+# Session State 초기화 및 오픈 DB 로드
 if 'stock_categories' not in st.session_state:
-    st.session_state.stock_categories = load_stocks_data()
+    st.session_state.stock_categories = load_stocks_data_public()
 
 if 'ops_data' not in st.session_state:
     st.session_state.ops_data = {}
@@ -207,15 +190,15 @@ def fetch_consensus_operating_profit(code):
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ 카테고리 & 종목 관리")
 
-# 파일 데이터 다시 불러오기 버튼
-if st.sidebar.button("🔄 파일에서 데이터 다시 로드"):
-    st.session_state.stock_categories = load_stocks_data()
-    st.sidebar.success("custom_stocks.json 데이터 재로드 완료!")
+# 다른 사용자가 변경한 내용 불러오기 버튼
+if st.sidebar.button("🔄 공유 데이터 가져오기"):
+    st.session_state.stock_categories = load_stocks_data_public()
+    st.sidebar.success("최신 데이터 동기화 완료!")
     st.rerun()
 
-if st.sidebar.button("💾 전체 종목 구성 및 수치 저장", type="primary"):
-    if save_stocks_data(st.session_state.stock_categories):
-        st.sidebar.success("custom_stocks.json 저장 완료!")
+if st.sidebar.button("💾 변경사항 전체 공유 저장", type="primary"):
+    if save_stocks_data_public(st.session_state.stock_categories):
+        st.sidebar.success("공유 저장소에 저장 완료!")
 
 if DART_API_KEY == "YOUR_DART_API_KEY_HERE":
     dart_key_input = st.sidebar.text_input("🔑 Open DART API 키 입력", type="password")
@@ -228,7 +211,7 @@ with st.sidebar.expander("📁 카테고리 추가"):
     if st.button("카테고리 생성"):
         if new_cat_name and new_cat_name not in st.session_state.stock_categories:
             st.session_state.stock_categories[new_cat_name] = {}
-            save_stocks_data(st.session_state.stock_categories)
+            save_stocks_data_public(st.session_state.stock_categories)
             st.success(f"'{new_cat_name}' 카테고리가 생성되었습니다.")
             st.rerun()
 
@@ -246,7 +229,7 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 
                 if target_cat in st.session_state.stock_categories:
                     st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': {}}
-                    save_stocks_data(st.session_state.stock_categories)
+                    save_stocks_data_public(st.session_state.stock_categories)
                     st.success(f"'{name}' 종목이 추가되었습니다!")
                     st.rerun()
 
@@ -267,7 +250,7 @@ stock_code = stock_info['code']
 
 if st.sidebar.button(f"❌ {selected_stock} 삭제"):
     del st.session_state.stock_categories[selected_category][selected_stock]
-    save_stocks_data(st.session_state.stock_categories)
+    save_stocks_data_public(st.session_state.stock_categories)
     st.success(f"{selected_stock} 삭제 완료")
     st.rerun()
 
@@ -321,7 +304,6 @@ for idx, yr in enumerate(past_years):
         st.session_state.stock_categories[selected_category][selected_stock]['ops'][yr] = val_input
         final_ops[yr] = val_input * 100_000_000.0
         
-        # 영업이익 마이너스 시 빨간색 강조 표시
         if val_input < 0:
             st.markdown(f"<p style='color: #FF4B4B; font-weight: bold; margin-top: -10px;'>🔴 {val_input:,.1f} 억 (적자)</p>", unsafe_allow_html=True)
             has_negative_op = True
@@ -346,9 +328,6 @@ with f_cols[0]:
         has_negative_op = True
     else:
         st.markdown(f"<p style='color: #00C853; font-size: 0.85em; margin-top: -10px;'>🟢 흑자 추정</p>", unsafe_allow_html=True)
-
-# 자동으로 변경사항을 파일에 저장
-save_stocks_data(st.session_state.stock_categories)
 
 if has_negative_op:
     st.warning("⚠️ 영업이익이 적자(마이너스)인 구간은 POR 산출 공식상 'N/A' 처리되어 차트선이 연결되지 않을 수 있습니다.")
