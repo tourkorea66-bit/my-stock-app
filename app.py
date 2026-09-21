@@ -55,7 +55,7 @@ def load_stocks_data_public():
             if isinstance(data, dict) and len(data) > 0:
                 return data
     except Exception as e:
-        st.sidebar.warning(f"공유 데이터 로드 실패: {e}")
+        st.sidebar.warning(f"데이터 로드 실패: {e}")
     return DEFAULT_STOCKS.copy()
 
 def save_stocks_data_public(data):
@@ -69,7 +69,7 @@ def save_stocks_data_public(data):
             st.sidebar.error(f"저장 실패 (응답 코드: {res.status_code})")
             return False
     except Exception as e:
-        st.sidebar.error(f"공유 저장 중 오류: {e}")
+        st.sidebar.error(f"저장 중 오류: {e}")
         return False
 
 # Session State 초기화
@@ -196,15 +196,15 @@ def fetch_consensus_operating_profit(code):
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ 카테고리 & 종목 관리")
 
-if st.sidebar.button("🔄 공유 데이터 다시 불러오기"):
+if st.sidebar.button("🔄 데이터 다시 불러오기"):
     st.session_state.stock_categories = load_stocks_data_public()
     st.session_state.ops_data = {}
     st.sidebar.success("최신 데이터 동기화 완료!")
     st.rerun()
 
-if st.sidebar.button("💾 변경사항 전체 공유 저장", type="primary"):
+if st.sidebar.button("💾 변경사항 전체 저장", type="primary"):
     if save_stocks_data_public(st.session_state.stock_categories):
-        st.sidebar.success("공유 저장소에 성공적으로 저장되었습니다!")
+        st.sidebar.success("저장소에 성공적으로 저장되었습니다!")
 
 if DART_API_KEY == "YOUR_DART_API_KEY_HERE":
     dart_key_input = st.sidebar.text_input("🔑 Open DART API 키 입력", type="password")
