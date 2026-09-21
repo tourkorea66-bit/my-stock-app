@@ -61,7 +61,6 @@ def load_stocks_data_from_kvdb():
             for name, val in stocks.items():
               if isinstance(val, dict):
                 code = val.get('code', '')
-                # 기존 구버전 데이터(ops 딕셔너리) 호환 처리
                 op_2026 = val.get(
                     'op_2026', val.get('ops', {}).get('2026', 0.0)
                 )
@@ -260,28 +259,45 @@ if st.sidebar.button(f"❌ {selected_stock} 삭제"):
   st.rerun()
 
 # ==================== 메인 화면 ====================
-st.title(
-    f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드"
-    " 시뮬레이션"
-)
 
-# --- 🎨 Metric 및 텍스트 글자 크기 축소 CSS 추가 ---
+# --- 🎨 CSS: 제목, 서브헤더 및 UI 컴포넌트 전체 크기 축소 ---
 st.markdown(
     """
     <style>
-    /* 1. Metric 라벨 축소 */
+    /* 0. 메인 컨테이너 상단 여백 축소 */
+    .block-container {
+        padding-top: 2rem !important;
+        padding-bottom: 2rem !important;
+    }
+    
+    /* 1. 메인 제목(st.title) 축소 */
+    h1 {
+        font-size: 1.35rem !important;
+        font-weight: 700 !important;
+        padding-bottom: 0.5rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+    
+    /* 2. 서브 제목(st.subheader) 축소 */
+    h3 {
+        font-size: 1.05rem !important;
+        font-weight: 600 !important;
+        margin-top: 0.5rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+
+    /* 3. Metric 라벨 및 값 축소 */
     [data-testid="stMetricLabel"] {
         font-size: 0.75rem !important;
     }
-    /* 2. Metric 수치(숫자) 축소 */
     [data-testid="stMetricValue"] {
         font-size: 1.05rem !important;
     }
-    /* 3. Metric 카드 패딩 및 여백 축소 */
     div[data-testid="stMetric"] {
         padding: 2px 4px !important;
     }
-    /* 4. Number Input 레이블 및 폰트 축소 */
+
+    /* 4. Number Input 레이블 및 입력창 축소 */
     div[data-testid="stNumberInput"] label p {
         font-size: 0.75rem !important;
     }
@@ -292,6 +308,11 @@ st.markdown(
     </style>
 """,
     unsafe_allow_html=True,
+)
+
+st.title(
+    f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드"
+    " 시뮬레이션"
 )
 
 # DART API를 통한 과거 5년 실적 실시간 조회
@@ -520,7 +541,7 @@ fig.update_layout(
             f"<b>{selected_stock} {start_date.year}년 1월 ~ 현재 POR 밴드"
             " 차트</b>"
         ),
-        font=dict(color='#FFFFFF', size=16),  # 차트 제목 글자 크기도 축소 (20 -> 16)
+        font=dict(color='#FFFFFF', size=13),  # 차트 제목 글자 크기 축소 (16 -> 13)
     ),
     paper_bgcolor='#1E1E1E',
     plot_bgcolor='#141414',
@@ -539,7 +560,7 @@ fig.update_layout(
         y=1.02,
         xanchor="right",
         x=1,
-        font=dict(color='#FFFFFF', size=11),  # 범례 글자 크기 축소
+        font=dict(color='#FFFFFF', size=11),
     ),
 )
 
