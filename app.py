@@ -413,4 +413,4 @@ fig.update_layout(
     height=600
 )
 
-st.plotly_chart(fig, use_container_dict_style=True)
+st.plotly_chart(fig, use_container_width=True)
