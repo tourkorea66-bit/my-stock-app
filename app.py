@@ -74,6 +74,10 @@ def save_stocks_data(data):
 if 'stock_categories' not in st.session_state:
     st.session_state.stock_categories = load_stocks_data()
 
+# 영업이익 데이터 저장을 위한 Session State 초기화
+if 'ops_data' not in st.session_state:
+    st.session_state.ops_data = {}
+
 # KRX 상장 종목 데이터
 @st.cache_data(ttl=86400)
 def get_krx_stock_list():
@@ -244,27 +248,35 @@ if st.sidebar.button(f"❌ {selected_stock} 삭제"):
 # ==================== 메인 화면 ====================
 st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드 시뮬레이션")
 
-hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
-est_ops = fetch_consensus_operating_profit(stock_code)
-
 past_years = ['2021', '2022', '2023', '2024', '2025']
+
+# 영업이익 데이터 세션 상태 초기화 (최초 1회만 API 조회)
+if selected_stock not in st.session_state.ops_data:
+    hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
+    est_ops = fetch_consensus_operating_profit(stock_code)
+    
+    st.session_state.ops_data[selected_stock] = {}
+    for yr in past_years:
+        st.session_state.ops_data[selected_stock][yr] = float(hist_ops.get(yr, 0.0) / 100_000_000.0)
+    st.session_state.ops_data[selected_stock]['2026'] = float(est_ops.get('2026', 0.0) / 100_000_000.0)
 
 st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
 
+final_ops = {}
+
 st.markdown("**(1) 과거 실적 영업이익 (DART 자동 수집 / 수동 수정 가능)**")
 p_cols = st.columns(len(past_years))
-final_ops = {}
 
 for idx, yr in enumerate(past_years):
     with p_cols[idx]:
-        auto_val_100m = hist_ops.get(yr, 0.0) / 100_000_000.0
         val_input = st.number_input(
             f"{yr}년 실적(억원)",
-            value=float(auto_val_100m),
+            value=st.session_state.ops_data[selected_stock].get(yr, 0.0),
             step=10.0,
             format="%.1f",
-            key=f"past_{selected_stock}_{yr}"
+            key=f"input_past_{selected_stock}_{yr}"
         )
+        st.session_state.ops_data[selected_stock][yr] = val_input
         final_ops[yr] = val_input * 100_000_000.0
 
 st.markdown("---")
@@ -273,19 +285,19 @@ st.markdown("**(2) 올해 추정 영업이익 (컨센서스 자동 조회 / 수�
 f_cols = st.columns(4)
 
 with f_cols[0]:
-    auto_est_100m = est_ops.get('2026', 0.0) / 100_000_000.0
-    input_100m = st.number_input(
+    input_2026 = st.number_input(
         "2026년 추정(억원)", 
-        value=float(auto_est_100m), 
+        value=st.session_state.ops_data[selected_stock].get('2026', 0.0), 
         step=10.0, 
         format="%.1f",
-        key=f"future_{selected_stock}_2026"
+        key=f"input_future_{selected_stock}_2026"
     )
-    final_ops['2026'] = input_100m * 100_000_000.0
+    st.session_state.ops_data[selected_stock]['2026'] = input_2026
+    final_ops['2026'] = input_2026 * 100_000_000.0
 
 # ==================== 주가 데이터 수집 (5년 전 1월 1일 ~ 현재) ====================
 end_date = datetime.today()
-start_date = datetime(end_date.year - 5, 1, 1)  # 5년 전 1월 1일로 설정
+start_date = datetime(end_date.year - 5, 1, 1)
 
 @st.cache_data(ttl=3600)
 def get_stock_data_api(code, start, end):
