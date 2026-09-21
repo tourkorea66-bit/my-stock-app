@@ -38,27 +38,29 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- 🔄 KVdb 로드 / 저장 함수 ---
+# --- 🔄 KVdb 로드 / 저장 함수 (수정 완료) ---
 def load_stocks_data_from_kvdb():
     base_data = DEFAULT_STOCKS.copy()
     try:
         res = requests.get(KVDB_FULL_URL, timeout=5)
         if res.status_code == 200:
             saved_data = res.json()
-            for cat, stocks in saved_data.items():
-                if cat not in base_data:
-                    base_data[cat] = {}
-                for name, val in stocks.items():
-                    if isinstance(val, dict):
-                        code = val.get('code', '')
-                        ops = val.get('ops', {})
-                    elif isinstance(val, list):
-                        code = val[0]
-                        ops = {}
-                    else:
-                        code = str(val)
-                        ops = {}
-                    base_data[cat][name] = {'code': code, 'ops': ops}
+            if isinstance(saved_data, dict):
+                for cat, stocks in saved_data.items():
+                    if cat not in base_data:
+                        base_data[cat] = {}
+                    if isinstance(stocks, dict):
+                        for name, val in stocks.items():
+                            if isinstance(val, dict):
+                                code = val.get('code', '')
+                                ops = val.get('ops', {})
+                            elif isinstance(val, list):
+                                code = val[0] if len(val) > 0 else ''
+                                ops = {}
+                            else:
+                                code = str(val)
+                                ops = {}
+                            base_data[cat][name] = {'code': code, 'ops': ops}
             return base_data
     except Exception as e:
         st.sidebar.error(f"KVdb 데이터 불러오기 실패: {e}")
