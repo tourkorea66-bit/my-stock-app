@@ -19,7 +19,6 @@ st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout
 
 # ==========================================
 # 🔑 KVdb 및 Open DART 설정
-# KVDB_BUCKET_ID: kvdb.io에서 발급받은 버킷 ID를 입력하세요.
 KVDB_BUCKET_ID = "YOUR_KVDB_BUCKET_ID_HERE"
 KVDB_KEY = "por_stock_data"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
@@ -124,26 +123,35 @@ def get_dart_corp_code_map(api_key):
         pass
     return corp_map
 
-# 단일 연도 DART API 호출 (결과값: 억원 단위로 반환)
+# 단일 연도 DART API 호출 (연결 CFS 우선 -> 실패 시 개별 OFS 조회)
 def _fetch_single_year_dart(args):
     b_year, clean_key, corp_code = args
-    try:
-        url = f"https://opendart.fss.or.kr/api/fnlttSinglAcnt.json?crtfc_key={clean_key}&corp_code={corp_code}&bsns_year={b_year}&reprt_code=11011"
-        res = requests.get(url, timeout=3)
-        data = res.json()
-        if data.get('status') == '000' and 'list' in data:
-            for item in data['list']:
-                account_nm = item.get('account_nm', '')
-                if ('영업이익' in account_nm or '영업손실' in account_nm) and '률' not in account_nm:
-                    val_str = item.get('thstrm_amount', '0').replace(',', '').strip()
-                    if val_str and val_str != '-':
-                        return b_year, round(float(val_str) / 100_000_000.0, 1)
-    except Exception:
-        pass
+    for fs_div in ['CFS', 'OFS']:
+        try:
+            url = f"https://opendart.fss.or.kr/api/fnlttSinglAcnt.json?crtfc_key={clean_key}&corp_code={corp_code}&bsns_year={b_year}&reprt_code=11011&fs_div={fs_div}"
+            res = requests.get(url, timeout=3)
+            data = res.json()
+            if data.get('status') == '000' and 'list' in data:
+                for item in data['list']:
+                    acc_id = str(item.get('account_id', ''))
+                    acc_nm = str(item.get('account_nm', '')).strip()
+                    
+                    is_op = (
+                        'OperatingProfitLoss' in acc_id or
+                        acc_nm in ['영업이익', '영업이익(손실)', '영업손실(이익)', '영업손실'] or
+                        ('영업이익' in acc_nm and '률' not in acc_nm and '이익률' not in acc_nm)
+                    )
+                    
+                    if is_op:
+                        val_str = item.get('thstrm_amount', '0').replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            return b_year, round(float(val_str) / 100_000_000.0, 1)
+        except Exception:
+            pass
     return b_year, 0.0
 
-# --- DART 5년치 데이터 병렬 API 수집 ---
-@st.cache_data(ttl=86400)
+# --- DART 과거 5년치 데이터 병렬 API 수집 ---
+@st.cache_data(ttl=3600)
 def fetch_operating_profit_dart(code, api_key):
     ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
     clean_key = str(api_key).strip()
@@ -166,40 +174,9 @@ def fetch_operating_profit_dart(code, api_key):
 
     return ops
 
-# --- 올해 추정 영업이익 (네이버 컨센서스) ---
-@st.cache_data(ttl=3600)
-def fetch_consensus_operating_profit(code):
-    consensus = {'2026': 0.0}
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    url = f"https://finance.naver.com/item/coinfoExecutionGrid.naver?code={code}&target=annual"
-    
-    try:
-        res = requests.get(url, headers=headers, timeout=3)
-        if res.status_code == 200:
-            tables = pd.read_html(io.StringIO(res.text))
-            for tbl in tables:
-                tbl_str = tbl.to_string()
-                if '영업이익' in tbl_str:
-                    for idx, row in tbl.iterrows():
-                        row_title = str(row.iloc[0])
-                        if '영업이익' in row_title and '률' not in row_title:
-                            for col_idx in range(1, len(tbl.columns)):
-                                col_hdr = str(tbl.columns[col_idx])
-                                val = row.iloc[col_idx]
-                                if '2026' in col_hdr and pd.notnull(val):
-                                    clean_v = re.sub(r'[^0-9.-]', '', str(val))
-                                    if clean_v and clean_v != '-':
-                                        consensus['2026'] = float(clean_v)
-                                        return consensus
-    except Exception:
-        pass
-            
-    return consensus
-
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ KVdb 및 종목 관리")
 
-# KVdb Bucket ID 설정
 bucket_input = st.sidebar.text_input("📦 KVdb Bucket ID 입력", value=KVDB_BUCKET_ID if KVDB_BUCKET_ID != "YOUR_KVDB_BUCKET_ID_HERE" else "")
 if bucket_input:
     KVDB_BUCKET_ID = bucket_input.strip()
@@ -236,7 +213,11 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 code = selected_search.split(" (")[1].replace(")", "")
                 
                 if target_cat in st.session_state.stock_categories:
-                    st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': {}}
+                    # 초기 영업이익 수집
+                    init_ops = fetch_operating_profit_dart(code, DART_API_KEY)
+                    init_ops['2026'] = 0.0  # 올해 추정치는 0.0으로 초기화하여 사용자 입력 대기
+                    
+                    st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': init_ops}
                     save_stocks_data_to_kvdb(st.session_state.stock_categories)
                     st.success(f"'{name}' 종목이 추가되었습니다!")
                     st.rerun()
@@ -268,14 +249,12 @@ st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드
 past_years = ['2021', '2022', '2023', '2024', '2025']
 saved_ops = stock_info.get('ops', {})
 
-# 저장된 실적이 없으면 API로 자동 로드 후 KVdb에 보관
+# 저장된 실적이 없으면 DART API로 과거 실적 로드 후 2026년은 0.0 세팅하여 저장
 if not saved_ops:
     hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
-    est_ops = fetch_consensus_operating_profit(stock_code)
-    
     for yr in past_years:
         saved_ops[yr] = float(hist_ops.get(yr, 0.0))
-    saved_ops['2026'] = float(est_ops.get('2026', 0.0))
+    saved_ops['2026'] = 0.0
     
     st.session_state.stock_categories[selected_category][selected_stock]['ops'] = saved_ops
     save_stocks_data_to_kvdb(st.session_state.stock_categories)
@@ -283,16 +262,17 @@ if not saved_ops:
 st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
 
 final_ops = {}
-p_cols = st.columns(len(past_years))
+p_cols = st.columns(6)  # 2021~2025 + 2026 총 6개 컬럼
 has_negative_op = False
 
-# 입력값 변경 시 KVdb 자동 반영 콜백
+# 입력값 변경 시 세션 상태 및 KVdb에 실시간 자동 동기화 콜백
 def update_op_value(cat, stock, yr):
     widget_key = f"input_{stock}_{yr}"
     new_val = st.session_state[widget_key]
     st.session_state.stock_categories[cat][stock]['ops'][yr] = new_val
     save_stocks_data_to_kvdb(st.session_state.stock_categories)
 
+# 2021년 ~ 2025년 (과거 실적)
 for idx, yr in enumerate(past_years):
     current_val = float(saved_ops.get(yr, 0.0))
     with p_cols[idx]:
@@ -313,8 +293,8 @@ for idx, yr in enumerate(past_years):
         else:
             st.markdown(f"<p style='color: #00C853; font-size: 0.85em; margin-top: -10px;'>🟢 흑자</p>", unsafe_allow_html=True)
 
-f_cols = st.columns(4)
-with f_cols[0]:
+# 2026년 (사용자 직접 입력 추정 실적)
+with p_cols[5]:
     val_2026 = float(saved_ops.get('2026', 0.0))
     input_2026 = st.number_input(
         "2026년 추정(억원)", 
