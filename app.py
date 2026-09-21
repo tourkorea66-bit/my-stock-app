@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import FinanceDataReader as fdr
 
 # 페이지 기본 설정
-st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
+st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
 # 🔑 고정 KVdb 엔드포인트 및 DART API 키 설정
@@ -43,25 +43,30 @@ def load_stocks_data_from_kvdb():
     base_data = DEFAULT_STOCKS.copy()
     try:
         res = requests.get(KVDB_URL, timeout=5)
+        # 응답 상태가 200이고 텍스트 내용이 존재할 때만 안전하게 JSON 파싱
         if res.status_code == 200 and res.text.strip():
-            saved_data = res.json()
-            if isinstance(saved_data, dict):
-                for cat, stocks in saved_data.items():
-                    if cat not in base_data:
-                        base_data[cat] = {}
-                    if isinstance(stocks, dict):
-                        for name, val in stocks.items():
-                            if isinstance(val, dict):
-                                code = val.get('code', '')
-                                ops = val.get('ops', {})
-                            elif isinstance(val, list):
-                                code = val[0] if len(val) > 0 else ''
-                                ops = {}
-                            else:
-                                code = str(val)
-                                ops = {}
-                            base_data[cat][name] = {'code': code, 'ops': ops}
-            return base_data
+            try:
+                saved_data = res.json()
+                if isinstance(saved_data, dict):
+                    for cat, stocks in saved_data.items():
+                        if cat not in base_data:
+                            base_data[cat] = {}
+                        if isinstance(stocks, dict):
+                            for name, val in stocks.items():
+                                if isinstance(val, dict):
+                                    code = val.get('code', '')
+                                    ops = val.get('ops', {})
+                                elif isinstance(val, list):
+                                    code = val[0] if len(val) > 0 else ''
+                                    ops = {}
+                                else:
+                                    code = str(val)
+                                    ops = {}
+                                base_data[cat][name] = {'code': code, 'ops': ops}
+                return base_data
+            except json.JSONDecodeError:
+                # KVdb가 비어있거나 JSON 형식이 아닐 경우 기본값 유지
+                pass
     except Exception as e:
         st.sidebar.warning(f"KVdb 불러오기 일시 실패 (기본값 로드): {e}")
     return base_data
@@ -241,7 +246,7 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 code = selected_search.split(" (")[1].replace(")", "")
                 
                 if target_cat in st.session_state.stock_categories:
-                    # 💡 추가 시점부터 DART 및 네이버 2026년 추정치를 조회하여 함께 저장
+                    # 추가 시점부터 DART 및 네이버 2026년 추정치를 조회하여 함께 저장
                     initial_ops = get_full_stock_ops(code)
                     st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': initial_ops}
                     
@@ -290,7 +295,7 @@ final_ops = {}
 p_cols = st.columns(len(past_years))
 has_negative_op = False
 
-# 💡 실적/추정치 입력값 변경 시 KVdb 실시간 자동 반영 콜백
+# 실적/추정치 입력값 변경 시 KVdb 실시간 자동 반영 콜백
 def update_op_value(cat, stock, yr):
     widget_key = f"input_{stock}_{yr}"
     new_val = st.session_state[widget_key]
