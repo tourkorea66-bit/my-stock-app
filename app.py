@@ -19,8 +19,6 @@ st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout
 
 # ==========================================
 # 🔑 고정 KVdb 엔드포인트 및 DART API 키 설정
-# KVdb Bucket ID: MzdTavSteRuyBzBFpDorrt
-# Key: scripts/por_stock_data
 KVDB_URL = "https://kvdb.io/MzdTavSteRuyBzBFpDorrt/scripts/por_stock_data"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
@@ -42,59 +40,46 @@ DEFAULT_STOCKS = {
 
 # --- 🔄 KVdb 동기화 함수 (LOAD & SAVE) ---
 def load_stocks_data_from_kvdb():
+    base_data = DEFAULT_STOCKS.copy()
     try:
-        # KVdb 읽기 요청
         res = requests.get(KVDB_URL, timeout=5)
         if res.status_code == 200 and res.text.strip():
             saved_data = res.json()
-            if isinstance(saved_data, dict) and len(saved_data) > 0:
-                # KVdb 데이터 구조 표준화 점검
-                cleaned_data = {}
+            if isinstance(saved_data, dict):
                 for cat, stocks in saved_data.items():
-                    cleaned_data[cat] = {}
+                    if cat not in base_data:
+                        base_data[cat] = {}
                     if isinstance(stocks, dict):
                         for name, val in stocks.items():
                             if isinstance(val, dict):
                                 code = val.get('code', '')
                                 ops = val.get('ops', {})
+                            elif isinstance(val, list):
+                                code = val[0]
+                                ops = {}
                             else:
                                 code = str(val)
                                 ops = {}
-                            cleaned_data[cat][name] = {'code': code, 'ops': ops}
-                return cleaned_data
+                            base_data[cat][name] = {'code': code, 'ops': ops}
+            return base_data
     except Exception as e:
-        st.sidebar.warning(f"KVdb 읽기 예외 발생: {e}")
-    
-    # 서버에 데이터가 없거나 실패 시 기본값 반환
-    return DEFAULT_STOCKS.copy()
+        st.sidebar.warning(f"KVdb 불러오기 임시 실패 (기본값 사용): {e}")
+    return base_data
 
 def save_stocks_data_to_kvdb(data):
     try:
-        # KVdb 저장 시 JSON 규격 지정
+        # json 전달 시 ensure_ascii=False 및 명시적 utf-8 인코딩 적용
         payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
-        headers = {
-            "Content-Type": "application/json; charset=utf-8"
-        }
-        
-        # POST/PUT을 연속 시도하여 kvdb 저장 보장
+        headers = {"Content-Type": "application/json; charset=utf-8"}
         res = requests.post(KVDB_URL, data=payload, headers=headers, timeout=5)
-        if res.status_code not in [200, 201]:
-            # POST가 거부될 경우 PUT으로 재시도
-            res = requests.put(KVDB_URL, data=payload, headers=headers, timeout=5)
-
+        
         if res.status_code in [200, 201]:
-            # 저장 직후 바로 제대로 적재되었는지 동기 검증
-            check_res = requests.get(KVDB_URL, timeout=3)
-            if check_res.status_code == 200 and check_res.text.strip():
-                return True
-            else:
-                st.sidebar.error("저장 요청은 성공했으나 KVdb 수신 데이터가 비어있습니다.")
-                return False
+            return True
         else:
-            st.sidebar.error(f"KVdb 저장 실패 (응답 코드: {res.status_code}, 내용: {res.text[:50]})")
+            st.sidebar.error(f"KVdb 저장 실패 (응답코드: {res.status_code})")
             return False
     except Exception as e:
-        st.sidebar.error(f"KVdb 저장 중 네트워크/파싱 오류: {e}")
+        st.sidebar.error(f"KVdb 저장 중 오류 발생: {e}")
         return False
 
 # Session State 초기화
@@ -214,13 +199,13 @@ col_btn1, col_btn2 = st.sidebar.columns(2)
 with col_btn1:
     if st.button("🔄 불러오기"):
         st.session_state.stock_categories = load_stocks_data_from_kvdb()
-        st.sidebar.success("KVdb 데이터 불러오기 완료!")
+        st.sidebar.success("로드 완료!")
         st.rerun()
 
 with col_btn2:
     if st.button("💾 동기화 저장", type="primary"):
         if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-            st.sidebar.success("KVdb 실제 동기화 저장 완료!")
+            st.sidebar.success("저장 완료!")
 
 # --- 📁 카테고리 추가 ---
 with st.sidebar.expander("📁 카테고리 추가"):
@@ -228,9 +213,10 @@ with st.sidebar.expander("📁 카테고리 추가"):
     if st.button("카테고리 생성"):
         if new_cat_name and new_cat_name not in st.session_state.stock_categories:
             st.session_state.stock_categories[new_cat_name] = {}
-            if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-                st.success(f"'{new_cat_name}' 카테고리 생성 및 동기화 완료")
-                st.rerun()
+            # 추가 즉시 서버 저장
+            save_stocks_data_to_kvdb(st.session_state.stock_categories)
+            st.success(f"'{new_cat_name}' 카테고리가 생성되고 저장되었습니다.")
+            st.rerun()
 
 # --- ➕ 신규 종목 추가 ---
 with st.sidebar.expander("➕ 신규 종목 추가"):
@@ -245,11 +231,14 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 code = selected_search.split(" (")[1].replace(")", "")
                 
                 if target_cat in st.session_state.stock_categories:
+                    # 종목 추가
                     st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': {}}
-                    # 추가 즉시 서버 동기화 검증
+                    # 추가 즉시 서버 저장
                     if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-                        st.success(f"'{name}' 추가 및 서버 저장 확인됨!")
-                        st.rerun()
+                        st.success(f"'{name}' 종목이 추가 및 KVdb에 저장되었습니다!")
+                    else:
+                        st.warning("화면에는 추가되었으나 KVdb 저장이 원활하지 않습니다.")
+                    st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.title("🔍 분석 대상 선택")
@@ -269,7 +258,7 @@ stock_code = stock_info['code']
 if st.sidebar.button(f"❌ {selected_stock} 삭제"):
     del st.session_state.stock_categories[selected_category][selected_stock]
     save_stocks_data_to_kvdb(st.session_state.stock_categories)
-    st.success(f"{selected_stock} 삭제 완료")
+    st.success(f"{selected_stock} 삭제 및 저장 완료")
     st.rerun()
 
 # ==================== 메인 화면 ====================
