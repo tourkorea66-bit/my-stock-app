@@ -1,6 +1,5 @@
 import os
 import json
-import re
 import io
 import copy
 import zipfile
@@ -20,34 +19,33 @@ st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
 # 🔑 JSONBin.io 및 Open DART 설정
-JSONBIN_BIN_ID = "6ab0e792ac6210605ae50647".strip()
-JSONBIN_API_KEY = "$2a$10$rD4B95ncdqx06uhoNoZx.e8D6bg7c7EKwxOHKb7siGAbfUW59G4Q6".strip()
+JSONBIN_BIN_ID = "여기에_BIN_ID_입력".strip()
+JSONBIN_API_KEY = "여기에_MASTER_KEY_입력".strip()
 
 JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
+# 기본 기본 종목 목록 (코드 및 2026년 기본 추정치만 보유)
 DEFAULT_STOCKS = {
     '반도체': {
-        'SK하이닉스': {'code': '000660', 'ops': {'2021': 124103.0, '2022': 68094.0, '2023': -77303.0, '2024': 234673.0, '2025': 0.0, '2026': 0.0}},
-        '티엘비': {'code': '356860', 'ops': {'2021': 134.0, '2022': 384.0, '2023': 31.0, '2024': 150.0, '2025': 0.0, '2026': 0.0}},
-        '엠케이전자': {'code': '033160', 'ops': {}},
-        'ISC': {'code': '095340', 'ops': {}},
-        '엘티씨': {'code': '170920', 'ops': {}},
-        '하나마이크론': {'code': '067310', 'ops': {}},
-        '하나머티리얼즈': {'code': '166090', 'ops': {}},
-        '코미코': {'code': '183300', 'ops': {}},
-        '에프에스티': {'code': '036810', 'ops': {}}
+        'SK하이닉스': {'code': '000660', 'op_2026': 0.0},
+        '티엘비': {'code': '356860', 'op_2026': 0.0},
+        '엠케이전자': {'code': '033160', 'op_2026': 0.0},
+        'ISC': {'code': '095340', 'op_2026': 0.0},
+        '엘티씨': {'code': '170920', 'op_2026': 0.0},
+        '하나마이크론': {'code': '067310', 'op_2026': 0.0},
+        '하나머티리얼즈': {'code': '166090', 'op_2026': 0.0},
+        '코미코': {'code': '183300', 'op_2026': 0.0},
+        '에프에스티': {'code': '036810', 'op_2026': 0.0}
     },
     '관심종목': {}
 }
 
-# --- 🔄 JSONBin 로드 / 저장 함수 ---
+# --- 🔄 JSONBin 자동 저장 / 로드 함수 ---
 def load_stocks_data_from_kvdb():
     base_data = copy.deepcopy(DEFAULT_STOCKS)
-    headers = {
-        "X-Master-Key": JSONBIN_API_KEY
-    }
+    headers = {"X-Master-Key": JSONBIN_API_KEY}
     try:
         res = requests.get(f"{JSONBIN_URL}/latest", headers=headers, timeout=5)
         if res.status_code == 200:
@@ -62,19 +60,15 @@ def load_stocks_data_from_kvdb():
                         for name, val in stocks.items():
                             if isinstance(val, dict):
                                 code = val.get('code', '')
-                                ops = val.get('ops', {})
-                            elif isinstance(val, list):
-                                code = val[0] if len(val) > 0 else ''
-                                ops = {}
+                                # 기존 구버전 데이터(ops 딕셔너리) 호환 처리
+                                op_2026 = val.get('op_2026', val.get('ops', {}).get('2026', 0.0))
                             else:
                                 code = str(val)
-                                ops = {}
-                            base_data[cat][name] = {'code': code, 'ops': ops}
+                                op_2026 = 0.0
+                            base_data[cat][name] = {'code': code, 'op_2026': float(op_2026)}
             return base_data
-        else:
-            st.sidebar.error(f"데이터 불러오기 실패 (상태 코드: {res.status_code})")
-    except Exception as e:
-        st.sidebar.error(f"JSONBin 데이터 불러오기 오류: {e}")
+    except Exception:
+        pass
     return base_data
 
 def save_stocks_data_to_kvdb(data):
@@ -86,21 +80,12 @@ def save_stocks_data_to_kvdb(data):
             "Content-Type": "application/json",
             "X-Master-Key": JSONBIN_API_KEY
         }
-        
         res = requests.put(JSONBIN_URL, json=data, headers=headers, timeout=5)
-        
-        if res.status_code == 200:
-            st.sidebar.success("JSONBin 동기화 완료!")
-            return True
-        else:
-            err_msg = res.json().get('message', res.text)
-            st.sidebar.error(f"저장 실패 (코드 {res.status_code}): {err_msg}")
-            return False
-    except Exception as e:
-        st.sidebar.error(f"JSONBin 저장 중 오류 발생: {e}")
+        return res.status_code == 200
+    except Exception:
         return False
 
-# Session State 초기화
+# 앱 시작 시 자동 불러오기
 if 'stock_categories' not in st.session_state:
     st.session_state.stock_categories = load_stocks_data_from_kvdb()
 
@@ -165,7 +150,7 @@ def _fetch_single_year_dart(args):
             pass
     return b_year, 0.0
 
-# --- DART 과거 5년치 데이터 병렬 API 수집 ---
+# --- DART 과거 5년치 데이터 병렬 수집 (캐싱 적용) ---
 @st.cache_data(ttl=3600)
 def fetch_operating_profit_dart(code, api_key):
     ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
@@ -190,15 +175,7 @@ def fetch_operating_profit_dart(code, api_key):
     return ops
 
 # ==================== 사이드바 ====================
-st.sidebar.title("⚙️ JSONBin 및 종목 관리")
-
-if st.sidebar.button("🔄 JSONBin에서 데이터 불러오기"):
-    st.session_state.stock_categories = load_stocks_data_from_kvdb()
-    st.sidebar.success("최신 데이터를 불러왔습니다.")
-    st.rerun()
-
-if st.sidebar.button("💾 전체 데이터 JSONBin에 저장", type="primary"):
-    save_stocks_data_to_kvdb(st.session_state.stock_categories)
+st.sidebar.title("⚙️ 종목 및 카테고리 관리")
 
 # --- 📁 카테고리 추가 ---
 with st.sidebar.expander("📁 카테고리 추가"):
@@ -207,7 +184,7 @@ with st.sidebar.expander("📁 카테고리 추가"):
         if new_cat_name and new_cat_name not in st.session_state.stock_categories:
             st.session_state.stock_categories[new_cat_name] = {}
             save_stocks_data_to_kvdb(st.session_state.stock_categories)
-            st.success(f"'{new_cat_name}' 카테고리가 생성되었습니다.")
+            st.toast(f"'{new_cat_name}' 카테고리가 생성되었습니다.", icon="✅")
             st.rerun()
 
 # --- ➕ 신규 종목 추가 ---
@@ -223,12 +200,9 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 code = selected_search.split(" (")[1].replace(")", "")
                 
                 if target_cat in st.session_state.stock_categories:
-                    init_ops = fetch_operating_profit_dart(code, DART_API_KEY)
-                    init_ops['2026'] = 0.0
-                    
-                    st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': init_ops}
+                    st.session_state.stock_categories[target_cat][name] = {'code': code, 'op_2026': 0.0}
                     save_stocks_data_to_kvdb(st.session_state.stock_categories)
-                    st.success(f"'{name}' 종목이 추가되었습니다!")
+                    st.toast(f"'{name}' 종목이 추가되었습니다.", icon="✅")
                     st.rerun()
 
 st.sidebar.markdown("---")
@@ -236,7 +210,7 @@ st.sidebar.title("🔍 분석 대상 선택")
 category_list = [cat for cat, stocks in st.session_state.stock_categories.items() if stocks]
 
 if not category_list:
-    st.warning("등록된 종목이 없습니다. 카테고리나 종목을 추가해주세요.")
+    st.warning("등록된 종목이 없습니다. 사이드바에서 카테고리나 종목을 추가해주세요.")
     st.stop()
 
 selected_category = st.sidebar.selectbox("카테고리 선택:", category_list)
@@ -249,74 +223,63 @@ stock_code = stock_info['code']
 if st.sidebar.button(f"❌ {selected_stock} 삭제"):
     del st.session_state.stock_categories[selected_category][selected_stock]
     save_stocks_data_to_kvdb(st.session_state.stock_categories)
-    st.success(f"{selected_stock} 삭제 완료")
+    st.toast(f"{selected_stock} 삭제 완료", icon="🗑️")
     st.rerun()
 
 # ==================== 메인 화면 ====================
 st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드 시뮬레이션")
 
-past_years = ['2021', '2022', '2023', '2024', '2025']
-saved_ops = stock_info.get('ops', {})
-
-if not saved_ops:
-    hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
-    for yr in past_years:
-        saved_ops[yr] = float(hist_ops.get(yr, 0.0))
-    saved_ops['2026'] = 0.0
-    
-    st.session_state.stock_categories[selected_category][selected_stock]['ops'] = saved_ops
-    save_stocks_data_to_kvdb(st.session_state.stock_categories)
+# DART API를 통한 과거 5년 실적 실시간 조회
+with st.spinner("DART에서 과거 영업이익 데이터를 불러오는 중..."):
+    dart_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
 
 st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
+
+# 2026년 추정치 수정 시 자동 저장 콜백 함수
+def update_2026_op(cat, stock):
+    widget_key = f"input_{stock}_2026"
+    new_val = st.session_state[widget_key]
+    st.session_state.stock_categories[cat][stock]['op_2026'] = new_val
+    save_stocks_data_to_kvdb(st.session_state.stock_categories)
+    st.toast(f"2026년 추정치 ({new_val:,.1f} 억원) 자동 저장 완료", icon="💾")
 
 final_ops = {}
 p_cols = st.columns(6)
 has_negative_op = False
+past_years = ['2021', '2022', '2023', '2024', '2025']
 
-def update_op_value(cat, stock, yr):
-    widget_key = f"input_{stock}_{yr}"
-    new_val = st.session_state[widget_key]
-    st.session_state.stock_categories[cat][stock]['ops'][yr] = new_val
-    save_stocks_data_to_kvdb(st.session_state.stock_categories)
-
+# DART 수집 실적 표시 (2021 ~ 2025)
 for idx, yr in enumerate(past_years):
-    current_val = float(saved_ops.get(yr, 0.0))
+    val_dart = float(dart_ops.get(yr, 0.0))
+    final_ops[yr] = val_dart * 100_000_000.0
+    
     with p_cols[idx]:
-        val_input = st.number_input(
-            f"{yr}년 실적(억원)",
-            value=current_val,
-            step=10.0,
-            format="%.1f",
-            key=f"input_{selected_stock}_{yr}",
-            on_change=update_op_value,
-            args=(selected_category, selected_stock, yr)
-        )
-        final_ops[yr] = val_input * 100_000_000.0
-        
-        if val_input < 0:
-            st.markdown(f"<p style='color: #FF4B4B; font-weight: bold; margin-top: -10px;'>🔴 {val_input:,.1f} 억 (적자)</p>", unsafe_allow_html=True)
+        st.metric(label=f"{yr}년 실적 (DART)", value=f"{val_dart:,.1f} 억")
+        if val_dart < 0:
+            st.markdown("<p style='color: #FF4B4B; font-weight: bold;'>🔴 적자</p>", unsafe_allow_html=True)
             has_negative_op = True
         else:
-            st.markdown(f"<p style='color: #00C853; font-size: 0.85em; margin-top: -10px;'>🟢 흑자</p>", unsafe_allow_html=True)
+            st.markdown("<p style='color: #00C853; font-size: 0.85em;'>🟢 흑자</p>", unsafe_allow_html=True)
 
+# 2026년 추정치 입력란 (엔터 시 자동 저장)
 with p_cols[5]:
-    val_2026 = float(saved_ops.get('2026', 0.0))
+    current_2026_val = float(stock_info.get('op_2026', 0.0))
     input_2026 = st.number_input(
         "2026년 추정(억원)", 
-        value=val_2026, 
+        value=current_2026_val, 
         step=10.0, 
         format="%.1f",
         key=f"input_{selected_stock}_2026",
-        on_change=update_op_value,
-        args=(selected_category, selected_stock, '2026')
+        on_change=update_2026_op,
+        args=(selected_category, selected_stock)
     )
     final_ops['2026'] = input_2026 * 100_000_000.0
     
     if input_2026 < 0:
-        st.markdown(f"<p style='color: #FF4B4B; font-weight: bold; margin-top: -10px;'>🔴 {input_2026:,.1f} 억 (적자 추정)</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #FF4B4B; font-weight: bold;'>🔴 적자 추정</p>", unsafe_allow_html=True)
         has_negative_op = True
     else:
-        st.markdown(f"<p style='color: #00C853; font-size: 0.85em; margin-top: -10px;'>🟢 흑자 추정</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #00C853; font-size: 0.85em;'>🟢 흑자 추정</p>", unsafe_allow_html=True)
 
 if has_negative_op:
     st.warning("⚠️ 영업이익이 적자(마이너스)인 구간은 POR 산출 공식상 'N/A' 처리되어 차트선이 연결되지 않을 수 있습니다.")
