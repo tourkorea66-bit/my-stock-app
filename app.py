@@ -2,6 +2,7 @@ import os
 import json
 import re
 import io
+import copy
 import zipfile
 import requests
 import xml.etree.ElementTree as ET
@@ -19,7 +20,11 @@ st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
 # 🔑 KVdb 및 Open DART 고정 설정
-KVDB_FULL_URL = "https://kvdb.io/4BFguH7NDFgCn3svCXBV8v/por_stock_data"
+BUCKET_ID = "4BFguH7NDFgCn3svCXBV8v"
+# ⚠️ KVdb 대시보드(Edit Bucket Policy)의 'Write Key' 항목에 설정하신 비밀키를 적어주세요.mysecretkey1234
+WRITE_KEY = "mysecretkey1234"  
+
+KVDB_FULL_URL = f"https://kvdb.io/{BUCKET_ID}/por_stock_data"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
@@ -38,10 +43,11 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- 🔄 KVdb 로드 / 저장 함수 (수정 완료) ---
+# --- 🔄 KVdb 로드 / 저장 함수 ---
 def load_stocks_data_from_kvdb():
-    base_data = DEFAULT_STOCKS.copy()
+    base_data = copy.deepcopy(DEFAULT_STOCKS)
     try:
+        # Read Key가 설정된 경우 auth=(READ_KEY, '') 추가 가능
         res = requests.get(KVDB_FULL_URL, timeout=5)
         if res.status_code == 200:
             saved_data = res.json()
@@ -68,29 +74,30 @@ def load_stocks_data_from_kvdb():
 
 def save_stocks_data_to_kvdb(data):
     try:
-        # KVdb.io 데이터 저장 시 POST 대신 PUT 메서드를 주로 사용합니다.
-        # JSON 직렬화 및 UTF-8 인코딩 명시
         payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
         headers = {"Content-Type": "application/json; charset=utf-8"}
         
-        # PUT 요청으로 변경
+        # Write Key 인증을 위한 Basic Auth 적용
         res = requests.put(
             KVDB_FULL_URL,
             data=payload,
             headers=headers,
+            auth=(WRITE_KEY, ''),
             timeout=5
         )
         
-        # 만약 PUT이 거부될 경우(405 등) fallback으로 POST 시도
+        # Fallback POST
         if res.status_code not in [200, 201]:
             res = requests.post(
                 KVDB_FULL_URL,
                 data=payload,
                 headers=headers,
+                auth=(WRITE_KEY, ''),
                 timeout=5
             )
 
         if res.status_code in [200, 201]:
+            st.sidebar.success("KVdb 동기화 완료!")
             return True
         else:
             st.sidebar.error(f"KVdb 저장 실패 (상태 코드: {res.status_code})")
@@ -137,13 +144,13 @@ def get_dart_corp_code_map(api_key):
         pass
     return corp_map
 
-# 단일 연도 DART API 호출 (연결 CFS 우선 -> 실패 시 개별 OFS 조회)
+# 단일 연도 DART API 호출
 def _fetch_single_year_dart(args):
     b_year, clean_key, corp_code = args
     for fs_div in ['CFS', 'OFS']:
         try:
             url = f"https://opendart.fss.or.kr/api/fnlttSinglAcnt.json?crtfc_key={clean_key}&corp_code={corp_code}&bsns_year={b_year}&reprt_code=11011&fs_div={fs_div}"
-            res = requests.get(url, timeout=3)
+            res = requests.get(url, timeout=4)
             data = res.json()
             if data.get('status') == '000' and 'list' in data:
                 for item in data['list']:
@@ -193,12 +200,11 @@ st.sidebar.title("⚙️ KVdb 및 종목 관리")
 
 if st.sidebar.button("🔄 KVdb에서 데이터 불러오기"):
     st.session_state.stock_categories = load_stocks_data_from_kvdb()
-    st.sidebar.success("KVdb에서 por_stock_data 데이터를 성공적으로 로드했습니다.")
+    st.sidebar.success("KVdb에서 최신 데이터를 불러왔습니다.")
     st.rerun()
 
 if st.sidebar.button("💾 전체 데이터 KVdb에 저장", type="primary"):
-    if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-        st.sidebar.success("KVdb (por_stock_data) 저장 완료!")
+    save_stocks_data_to_kvdb(st.session_state.stock_categories)
 
 # --- 📁 카테고리 추가 ---
 with st.sidebar.expander("📁 카테고리 추가"):
@@ -223,9 +229,8 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 code = selected_search.split(" (")[1].replace(")", "")
                 
                 if target_cat in st.session_state.stock_categories:
-                    # 초기 영업이익 수집
                     init_ops = fetch_operating_profit_dart(code, DART_API_KEY)
-                    init_ops['2026'] = 0.0  # 올해 추정치는 0.0으로 초기화하여 사용자 입력 대기
+                    init_ops['2026'] = 0.0
                     
                     st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': init_ops}
                     save_stocks_data_to_kvdb(st.session_state.stock_categories)
@@ -259,7 +264,6 @@ st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드
 past_years = ['2021', '2022', '2023', '2024', '2025']
 saved_ops = stock_info.get('ops', {})
 
-# 저장된 실적이 없으면 DART API로 과거 실적 로드 후 2026년은 0.0 세팅하여 저장
 if not saved_ops:
     hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
     for yr in past_years:
@@ -272,17 +276,15 @@ if not saved_ops:
 st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
 
 final_ops = {}
-p_cols = st.columns(6)  # 2021~2025 + 2026 총 6개 컬럼
+p_cols = st.columns(6)
 has_negative_op = False
 
-# 입력값 변경 시 세션 상태 및 KVdb에 실시간 자동 동기화 콜백
 def update_op_value(cat, stock, yr):
     widget_key = f"input_{stock}_{yr}"
     new_val = st.session_state[widget_key]
     st.session_state.stock_categories[cat][stock]['ops'][yr] = new_val
     save_stocks_data_to_kvdb(st.session_state.stock_categories)
 
-# 2021년 ~ 2025년 (과거 실적)
 for idx, yr in enumerate(past_years):
     current_val = float(saved_ops.get(yr, 0.0))
     with p_cols[idx]:
@@ -303,7 +305,6 @@ for idx, yr in enumerate(past_years):
         else:
             st.markdown(f"<p style='color: #00C853; font-size: 0.85em; margin-top: -10px;'>🟢 흑자</p>", unsafe_allow_html=True)
 
-# 2026년 (사용자 직접 입력 추정 실적)
 with p_cols[5]:
     val_2026 = float(saved_ops.get('2026', 0.0))
     input_2026 = st.number_input(
@@ -345,7 +346,6 @@ if stock_df.empty:
     st.error("불러온 주가 데이터가 없습니다.")
     st.stop()
 
-# Dataframe 가공 및 시가총액 계산
 stock_df['날짜'] = pd.to_datetime(stock_df['Date'])
 stock_df['종가'] = pd.to_numeric(stock_df['Close'], errors='coerce')
 stock_df['연도'] = stock_df['날짜'].dt.year.astype(str)
