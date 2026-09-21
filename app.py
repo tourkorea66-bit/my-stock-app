@@ -3,6 +3,7 @@ import json
 import re
 import io
 import zipfile
+import time
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -25,7 +26,7 @@ CORP_CODE_CACHE_FILE = os.path.join(BASE_DIR, 'corp_code_map.json')
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 
 # 🌐 계정 없이 사용하는 노-회원가입 오픈 저장소 설정
-# 다른 사람이 예상하기 힘든 본인만의 고유한 주소 이름(예: my_por_simulator_9981)으로 변경하세요.
+# 다른 사람과 겹치지 않는 고유한 URL 경로로 변경하세요.
 SHARED_STORE_URL = "https://jsonbin.org/my_por_simulator_stocks_v1"
 # ==========================================
 
@@ -44,14 +45,18 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- 🌐 오픈 공유 저장소 로드/저장 로직 (no-signup) ---
+# --- 🌐 캐시 방지 적용 오픈 공유 저장소 로드/저장 로직 ---
 def load_stocks_data_public():
     try:
-        res = requests.get(SHARED_STORE_URL, timeout=5)
-        if res.status_code == 200 and res.json():
-            return res.json()
-    except Exception:
-        pass
+        # 타임스탬프를 붙여 캐시된 응답을 방지합니다.
+        fetch_url = f"{SHARED_STORE_URL}?_t={int(time.time())}"
+        res = requests.get(fetch_url, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            if isinstance(data, dict) and len(data) > 0:
+                return data
+    except Exception as e:
+        st.sidebar.warning(f"공유 데이터 로드 실패: {e}")
     return DEFAULT_STOCKS.copy()
 
 def save_stocks_data_public(data):
@@ -63,7 +68,7 @@ def save_stocks_data_public(data):
         st.sidebar.error(f"공유 저장 중 오류: {e}")
         return False
 
-# Session State 초기화 및 오픈 DB 로드
+# Session State 초기화 (앱 시작/새로고침 시 저장소에서 불러오기)
 if 'stock_categories' not in st.session_state:
     st.session_state.stock_categories = load_stocks_data_public()
 
@@ -113,7 +118,6 @@ def get_dart_corp_code_map(api_key):
         pass
     return corp_map
 
-# 단일 연도 DART API 호출 함수
 def _fetch_single_year_dart(args):
     b_year, clean_key, corp_code = args
     try:
@@ -131,7 +135,6 @@ def _fetch_single_year_dart(args):
         pass
     return b_year, 0.0
 
-# --- DART 5년치 데이터 병렬 API 수집 ---
 @st.cache_data(ttl=86400)
 def fetch_operating_profit_dart(code, api_key):
     ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
@@ -155,7 +158,6 @@ def fetch_operating_profit_dart(code, api_key):
 
     return ops
 
-# --- 올해 추정 영업이익 (네이버 컨센서스) ---
 @st.cache_data(ttl=3600)
 def fetch_consensus_operating_profit(code):
     consensus = {'2026': 0.0}
@@ -190,15 +192,17 @@ def fetch_consensus_operating_profit(code):
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ 카테고리 & 종목 관리")
 
-# 다른 사용자가 변경한 내용 불러오기 버튼
-if st.sidebar.button("🔄 공유 데이터 가져오기"):
+if st.sidebar.button("🔄 공유 데이터 다시 불러오기"):
     st.session_state.stock_categories = load_stocks_data_public()
+    st.session_state.ops_data = {} # ops_data 초기화하여 원본에서 다시 로드
     st.sidebar.success("최신 데이터 동기화 완료!")
     st.rerun()
 
 if st.sidebar.button("💾 변경사항 전체 공유 저장", type="primary"):
     if save_stocks_data_public(st.session_state.stock_categories):
         st.sidebar.success("공유 저장소에 저장 완료!")
+    else:
+        st.sidebar.error("저장 실패!")
 
 if DART_API_KEY == "YOUR_DART_API_KEY_HERE":
     dart_key_input = st.sidebar.text_input("🔑 Open DART API 키 입력", type="password")
@@ -259,25 +263,23 @@ st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드
 
 past_years = ['2021', '2022', '2023', '2024', '2025']
 
-# 이미 저장된 값이 있다면 API 조회를 통째로 Skip
+# 저장된 ops 데이터 우선 불러오기 로직
+saved_ops = stock_info.get('ops', {})
+
 if selected_stock not in st.session_state.ops_data:
-    saved_ops = stock_info.get('ops', {})
     st.session_state.ops_data[selected_stock] = {}
     
-    # 1. 과거 실적 (저장된 값이 없으면 API 조회)
-    has_all_past = all(yr in saved_ops and saved_ops[yr] != 0.0 for yr in past_years)
-    if has_all_past:
-        for yr in past_years:
+    # 1. 과거 실적 (저장된 값 우선 체크)
+    hist_ops = None
+    for yr in past_years:
+        if yr in saved_ops and saved_ops[yr] != 0.0:
             st.session_state.ops_data[selected_stock][yr] = float(saved_ops[yr])
-    else:
-        hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
-        for yr in past_years:
-            if yr in saved_ops and saved_ops[yr] != 0.0:
-                st.session_state.ops_data[selected_stock][yr] = float(saved_ops[yr])
-            else:
-                st.session_state.ops_data[selected_stock][yr] = float(hist_ops.get(yr, 0.0) / 100_000_000.0)
+        else:
+            if hist_ops is None:
+                hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
+            st.session_state.ops_data[selected_stock][yr] = float(hist_ops.get(yr, 0.0) / 100_000_000.0)
             
-    # 2. 2026년 추정치 (저장된 값이 없으면 크롤링)
+    # 2. 2026년 추정치 (저장된 값 우선 체크)
     if '2026' in saved_ops and saved_ops['2026'] != 0.0:
         st.session_state.ops_data[selected_stock]['2026'] = float(saved_ops['2026'])
     else:
@@ -300,6 +302,7 @@ for idx, yr in enumerate(past_years):
             format="%.1f",
             key=f"input_past_{selected_stock}_{yr}"
         )
+        # 세션 및 카테고리 딕셔너리에 즉시 반영
         st.session_state.ops_data[selected_stock][yr] = val_input
         st.session_state.stock_categories[selected_category][selected_stock]['ops'][yr] = val_input
         final_ops[yr] = val_input * 100_000_000.0
@@ -331,6 +334,9 @@ with f_cols[0]:
 
 if has_negative_op:
     st.warning("⚠️ 영업이익이 적자(마이너스)인 구간은 POR 산출 공식상 'N/A' 처리되어 차트선이 연결되지 않을 수 있습니다.")
+
+# 수정한 값 자동 공유 저장 (선택 사항: 숫자를 바꿀 때마다 자동으로 서버에 저장)
+save_stocks_data_public(st.session_state.stock_categories)
 
 # ==================== 주가 데이터 수집 ====================
 end_date = datetime.today()
