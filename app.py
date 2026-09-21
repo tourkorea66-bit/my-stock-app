@@ -26,20 +26,20 @@ DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 
 DEFAULT_STOCKS = {
     '반도체': {
-        'SK하이닉스': '000660',
-        '티엘비': '356860',
-        '엠케이전자': '033160',
-        'ISC': '095340',
-        '엘티씨': '170920',
-        '하나마이크론': '067310',
-        '하나머티리얼즈': '166090',
-        '코미코': '183300',
-        '에프에스티': '036810'
+        'SK하이닉스': {'code': '000660', 'ops': {}},
+        '티엘비': {'code': '356860', 'ops': {}},
+        '엠케이전자': {'code': '033160', 'ops': {}},
+        'ISC': {'code': '095340', 'ops': {}},
+        '엘티씨': {'code': '170920', 'ops': {}},
+        '하나마이크론': {'code': '067310', 'ops': {}},
+        '하나머티리얼즈': {'code': '166090', 'ops': {}},
+        '코미코': {'code': '183300', 'ops': {}},
+        '에프에스티': {'code': '036810', 'ops': {}}
     },
     '관심종목': {}
 }
 
-# --- JSON 저장/로드 로직 ---
+# --- JSON 저장/로드 로직 (하위 호환성 유지) ---
 def load_stocks_data():
     if os.path.exists(JSON_FILE):
         try:
@@ -49,10 +49,16 @@ def load_stocks_data():
                 for cat, stocks in data.items():
                     cleaned_data[cat] = {}
                     for name, val in stocks.items():
-                        if isinstance(val, list):
-                            cleaned_data[cat][name] = val[0]
+                        if isinstance(val, dict):
+                            code = val.get('code', '')
+                            ops = val.get('ops', {})
+                        elif isinstance(val, list):
+                            code = val[0]
+                            ops = {}
                         else:
-                            cleaned_data[cat][name] = val
+                            code = str(val)
+                            ops = {}
+                        cleaned_data[cat][name] = {'code': code, 'ops': ops}
                 return cleaned_data
         except Exception as e:
             st.sidebar.error(f"JSON 로드 중 오류: {e}")
@@ -74,7 +80,6 @@ def save_stocks_data(data):
 if 'stock_categories' not in st.session_state:
     st.session_state.stock_categories = load_stocks_data()
 
-# 영업이익 데이터 저장을 위한 Session State 초기화
 if 'ops_data' not in st.session_state:
     st.session_state.ops_data = {}
 
@@ -191,7 +196,7 @@ def fetch_consensus_operating_profit(code):
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ 카테고리 & 종목 관리")
 
-if st.sidebar.button("💾 전체 종목 구성 저장", type="primary"):
+if st.sidebar.button("💾 전체 종목 구성 및 수치 저장", type="primary"):
     if save_stocks_data(st.session_state.stock_categories):
         st.sidebar.success("성공적으로 custom_stocks.json 파일에 저장되었습니다!")
 
@@ -220,7 +225,7 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 name = selected_search.split(" (")[0]
                 code = selected_search.split(" (")[1].replace(")", "")
                 
-                st.session_state.stock_categories[target_cat][name] = code
+                st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': {}}
                 save_stocks_data(st.session_state.stock_categories)
                 st.success(f"'{name}' 종목이 추가 및 저장되었습니다!")
                 st.rerun()
@@ -237,7 +242,8 @@ selected_category = st.sidebar.selectbox("카테고리 선택:", category_list)
 available_stocks = st.session_state.stock_categories[selected_category]
 selected_stock = st.sidebar.selectbox("종목 선택:", list(available_stocks.keys()))
 
-stock_code = available_stocks[selected_stock]
+stock_info = available_stocks[selected_stock]
+stock_code = stock_info['code']
 
 if st.sidebar.button(f"❌ {selected_stock} 삭제"):
     del st.session_state.stock_categories[selected_category][selected_stock]
@@ -249,22 +255,33 @@ if st.sidebar.button(f"❌ {selected_stock} 삭제"):
 st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드 시뮬레이션")
 
 past_years = ['2021', '2022', '2023', '2024', '2025']
+all_years = past_years + ['2026']
 
-# 영업이익 데이터 세션 상태 초기화 (최초 1회만 API 조회)
+# 영업이익 데이터 세션 및 저장소 로드 로직 (JSON 우선 -> 미존재 시 API)
 if selected_stock not in st.session_state.ops_data:
-    hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
-    est_ops = fetch_consensus_operating_profit(stock_code)
-    
+    saved_ops = stock_info.get('ops', {})
     st.session_state.ops_data[selected_stock] = {}
+    
+    # 1. 과거 실적 불러오기
+    hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
     for yr in past_years:
-        st.session_state.ops_data[selected_stock][yr] = float(hist_ops.get(yr, 0.0) / 100_000_000.0)
-    st.session_state.ops_data[selected_stock]['2026'] = float(est_ops.get('2026', 0.0) / 100_000_000.0)
+        if yr in saved_ops and saved_ops[yr] != 0.0:
+            st.session_state.ops_data[selected_stock][yr] = float(saved_ops[yr])
+        else:
+            st.session_state.ops_data[selected_stock][yr] = float(hist_ops.get(yr, 0.0) / 100_000_000.0)
+            
+    # 2. 2026년 추정치 불러오기
+    est_ops = fetch_consensus_operating_profit(stock_code)
+    if '2026' in saved_ops and saved_ops['2026'] != 0.0:
+        st.session_state.ops_data[selected_stock]['2026'] = float(saved_ops['2026'])
+    else:
+        st.session_state.ops_data[selected_stock]['2026'] = float(est_ops.get('2026', 0.0) / 100_000_000.0)
 
 st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
 
 final_ops = {}
 
-st.markdown("**(1) 과거 실적 영업이익 (DART 자동 수집 / 수동 수정 가능)**")
+st.markdown("**(1) 과거 실적 영업이익 (DART 자동 수집 / 저장된 추정치 적용)**")
 p_cols = st.columns(len(past_years))
 
 for idx, yr in enumerate(past_years):
@@ -277,11 +294,12 @@ for idx, yr in enumerate(past_years):
             key=f"input_past_{selected_stock}_{yr}"
         )
         st.session_state.ops_data[selected_stock][yr] = val_input
+        st.session_state.stock_categories[selected_category][selected_stock]['ops'][yr] = val_input
         final_ops[yr] = val_input * 100_000_000.0
 
 st.markdown("---")
 
-st.markdown("**(2) 올해 추정 영업이익 (컨센서스 자동 조회 / 수동 수정 가능)**")
+st.markdown("**(2) 올해 추정 영업이익 (컨센서스 자동 조회 / 저장된 추정치 적용)**")
 f_cols = st.columns(4)
 
 with f_cols[0]:
@@ -293,6 +311,7 @@ with f_cols[0]:
         key=f"input_future_{selected_stock}_2026"
     )
     st.session_state.ops_data[selected_stock]['2026'] = input_2026
+    st.session_state.stock_categories[selected_category][selected_stock]['ops']['2026'] = input_2026
     final_ops['2026'] = input_2026 * 100_000_000.0
 
 # ==================== 주가 데이터 수집 (5년 전 1월 1일 ~ 현재) ====================
