@@ -19,6 +19,8 @@ st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout
 
 # ==========================================
 # 🔑 고정 KVdb 엔드포인트 및 DART API 키 설정
+# KVdb Bucket ID: MzdTavSteRuyBzBFpDorrt
+# Key: scripts/por_stock_data
 KVDB_URL = "https://kvdb.io/MzdTavSteRuyBzBFpDorrt/scripts/por_stock_data"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
@@ -41,11 +43,12 @@ DEFAULT_STOCKS = {
 # --- 🔄 KVdb 동기화 함수 (LOAD & SAVE) ---
 def load_stocks_data_from_kvdb():
     try:
+        # KVdb 읽기 요청
         res = requests.get(KVDB_URL, timeout=5)
-        # 응답이 정상이고 내용이 존재할 때만 파싱
-        if res.status_code == 200 and res.text and res.text.strip():
+        if res.status_code == 200 and res.text.strip():
             saved_data = res.json()
             if isinstance(saved_data, dict) and len(saved_data) > 0:
+                # KVdb 데이터 구조 표준화 점검
                 cleaned_data = {}
                 for cat, stocks in saved_data.items():
                     cleaned_data[cat] = {}
@@ -60,31 +63,38 @@ def load_stocks_data_from_kvdb():
                             cleaned_data[cat][name] = {'code': code, 'ops': ops}
                 return cleaned_data
     except Exception as e:
-        # 에러 경고 메시지를 노출하지 않고 기본값으로 유연하게 Fallback
-        pass
+        st.sidebar.warning(f"KVdb 읽기 예외 발생: {e}")
     
+    # 서버에 데이터가 없거나 실패 시 기본값 반환
     return DEFAULT_STOCKS.copy()
 
 def save_stocks_data_to_kvdb(data):
     try:
+        # KVdb 저장 시 JSON 규격 지정
         payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
         headers = {
             "Content-Type": "application/json; charset=utf-8"
         }
         
-        # POST 요청 수행
+        # POST/PUT을 연속 시도하여 kvdb 저장 보장
         res = requests.post(KVDB_URL, data=payload, headers=headers, timeout=5)
         if res.status_code not in [200, 201]:
-            # 실패 시 PUT 재시도
+            # POST가 거부될 경우 PUT으로 재시도
             res = requests.put(KVDB_URL, data=payload, headers=headers, timeout=5)
 
         if res.status_code in [200, 201]:
-            return True
+            # 저장 직후 바로 제대로 적재되었는지 동기 검증
+            check_res = requests.get(KVDB_URL, timeout=3)
+            if check_res.status_code == 200 and check_res.text.strip():
+                return True
+            else:
+                st.sidebar.error("저장 요청은 성공했으나 KVdb 수신 데이터가 비어있습니다.")
+                return False
         else:
-            st.sidebar.error(f"KVdb 저장 실패 (응답 코드: {res.status_code})")
+            st.sidebar.error(f"KVdb 저장 실패 (응답 코드: {res.status_code}, 내용: {res.text[:50]})")
             return False
     except Exception as e:
-        st.sidebar.error(f"KVdb 저장 통신 오류: {e}")
+        st.sidebar.error(f"KVdb 저장 중 네트워크/파싱 오류: {e}")
         return False
 
 # Session State 초기화
@@ -204,13 +214,13 @@ col_btn1, col_btn2 = st.sidebar.columns(2)
 with col_btn1:
     if st.button("🔄 불러오기"):
         st.session_state.stock_categories = load_stocks_data_from_kvdb()
-        st.sidebar.success("데이터 불러오기 완료!")
+        st.sidebar.success("KVdb 데이터 불러오기 완료!")
         st.rerun()
 
 with col_btn2:
     if st.button("💾 동기화 저장", type="primary"):
         if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-            st.sidebar.success("동기화 저장 완료!")
+            st.sidebar.success("KVdb 실제 동기화 저장 완료!")
 
 # --- 📁 카테고리 추가 ---
 with st.sidebar.expander("📁 카테고리 추가"):
@@ -218,9 +228,9 @@ with st.sidebar.expander("📁 카테고리 추가"):
     if st.button("카테고리 생성"):
         if new_cat_name and new_cat_name not in st.session_state.stock_categories:
             st.session_state.stock_categories[new_cat_name] = {}
-            save_stocks_data_to_kvdb(st.session_state.stock_categories)
-            st.success(f"'{new_cat_name}' 카테고리 생성 완료")
-            st.rerun()
+            if save_stocks_data_to_kvdb(st.session_state.stock_categories):
+                st.success(f"'{new_cat_name}' 카테고리 생성 및 동기화 완료")
+                st.rerun()
 
 # --- ➕ 신규 종목 추가 ---
 with st.sidebar.expander("➕ 신규 종목 추가"):
@@ -236,8 +246,9 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 
                 if target_cat in st.session_state.stock_categories:
                     st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': {}}
+                    # 추가 즉시 서버 동기화 검증
                     if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-                        st.success(f"'{name}' 추가 및 저장 완료!")
+                        st.success(f"'{name}' 추가 및 서버 저장 확인됨!")
                         st.rerun()
 
 st.sidebar.markdown("---")
@@ -333,84 +344,94 @@ with f_cols[0]:
         st.markdown(f"<p style='color: #00C853; font-size: 0.85em; margin-top: -10px;'>🟢 흑자 추정</p>", unsafe_allow_html=True)
 
 if has_negative_op:
-    st.info("💡 영업적자(영업이익 < 0) 구간에는 POR 밴드 값이 음수로 계산되어 시각화 시 음수 영역에 표시됩니다.")
+    st.warning("⚠️ 영업이익이 적자(마이너스)인 구간은 POR 산출 공식상 'N/A' 처리되어 차트선이 연결되지 않을 수 있습니다.")
 
-# ==================== 주가 데이터 수집 및 밴드 차트 시각화 ====================
+# ==================== 주가 데이터 수집 ====================
+end_date = datetime.today()
+start_date = datetime(end_date.year - 5, 1, 1)
+
 @st.cache_data(ttl=3600)
-def fetch_stock_prices(code, start_date):
-    try:
-        df = fdr.DataReader(code, start_date)
-        return df
-    except Exception:
-        return pd.DataFrame()
+def get_stock_data_api(code, start, end):
+    df = fdr.DataReader(code, start=start.strftime('%Y-%m-%d'), end=end.strftime('%Y-%m-%d'))
+    return df.reset_index()
 
-df_price = fetch_stock_prices(stock_code, "2021-01-01")
-
-if df_price.empty:
-    st.error("주가 데이터를 불러올 수 없습니다. 종목 코드를 확인해주세요.")
+try:
+    stock_df = get_stock_data_api(stock_code, start_date, end_date)
+except Exception as e:
+    st.error(f"주가 데이터 불러오기 실패: {e}")
     st.stop()
 
-# POR 멀티플 밴드 계산
-por_multiples = [5, 10, 15, 20, 25]
+if stock_df.empty:
+    st.error("불러온 주가 데이터가 없습니다.")
+    st.stop()
 
-# 일자별 해당 연도 영업이익 매핑
-def get_op_for_date(dt):
-    year = str(dt.year)
-    if year in final_ops:
-        return final_ops[year]
-    elif dt.year >= 2026:
-        return final_ops['2026']
-    else:
-        return final_ops['2021']
+# Dataframe 가공 및 시가총액 계산
+stock_df['날짜'] = pd.to_datetime(stock_df['Date'])
+stock_df['종가'] = pd.to_numeric(stock_df['Close'], errors='coerce')
+stock_df['연도'] = stock_df['날짜'].dt.year.astype(str)
 
-# 시가총액 계산용 상장주식수 추정
-latest_close = df_price['Close'].iloc[-1]
-shares_count = 0
-if not krx_df.empty:
-    row_info = krx_df[krx_df['Code'] == stock_code]
-    if not row_info.empty and 'Stocks' in row_info.columns:
-        shares_count = row_info['Stocks'].values[0]
+if 'Marcap' in stock_df.columns and stock_df['Marcap'].notnull().sum() > 0:
+    stock_df['시가총액'] = pd.to_numeric(stock_df['Marcap'], errors='coerce')
+else:
+    shares = 0
+    if not krx_df.empty and 'Code' in krx_df.columns:
+        matched = krx_df[krx_df['Code'] == stock_code]
+        if not matched.empty:
+            for col_name in ['Stocks', 'ListingShares', 'Shares']:
+                if col_name in matched.columns and pd.notnull(matched[col_name].values[0]):
+                    shares = float(matched[col_name].values[0])
+                    if shares > 0:
+                        break
+    stock_df['시가총액'] = stock_df['종가'] * shares if shares > 0 else np.nan
 
-# 상장주식수를 찾지 못한 경우 추정
-if shares_count <= 0:
-    shares_count = 10_000_000
+stock_df['수정_영업이익'] = stock_df['연도'].map(final_ops)
+stock_df['수정_영업이익'] = pd.to_numeric(stock_df['수정_영업이익'], errors='coerce')
 
-df_price['OP'] = df_price.index.map(get_op_for_date)
-df_price['MarketCap'] = df_price['Close'] * shares_count
+# POR 계산
+stock_df['수정_POR'] = np.where(
+    (stock_df['수정_영업이익'].notnull()) & (stock_df['수정_영업이익'] > 0) & (stock_df['시가총액'].notnull()),
+    stock_df['시가총액'] / stock_df['수정_영업이익'],
+    np.nan
+)
 
-# 차트 생성
+valid_por = stock_df['수정_POR'].dropna()
+mean_val = valid_por.mean() if len(valid_por) > 0 else 0.0
+std_val = valid_por.std() if len(valid_por) > 0 else 0.0
+
+stock_df['Mean'] = mean_val
+stock_df['+1σ'] = mean_val + std_val
+stock_df['+2σ'] = mean_val + (std_val * 2)
+stock_df['-1σ'] = mean_val - std_val
+stock_df['-2σ'] = mean_val - (std_val * 2)
+
+c1, c2, c3, c4, c5 = st.columns(5)
+latest_close = stock_df['종가'].iloc[-1] if not stock_df.empty else 0
+latest_marcap_val = stock_df['시가총액'].dropna().iloc[-1] if not stock_df['시가총액'].dropna().empty else 0
+
+c1.metric("최신 종가", f"{latest_close:,.0f} 원")
+c2.metric("현재 시가총액", f"{latest_marcap_val / 100_000_000:,.1f} 억원" if latest_marcap_val > 0 else "N/A")
+c3.metric(f"평균 POR ({start_date.year}~현재)", f"{mean_val:.2f}")
+c4.metric("표준편차 (STDEV)", f"{std_val:.2f}")
+c5.metric("+2σ 밴드 상단", f"{(mean_val + std_val*2):.2f}")
+
 fig = go.Figure()
-
-# 실제 주가 선 추가
-fig.add_trace(go.Scatter(
-    x=df_price.index,
-    y=df_price['Close'],
-    mode='lines',
-    name='주가 (Close)',
-    line=dict(color='black', width=2)
-))
-
-# POR 밴드선 추가
-colors = ['#1f77b4', '#2ca02c', '#ff7f0e', '#d62728', '#9467bd']
-for idx, por in enumerate(por_multiples):
-    target_mc = df_price['OP'] * por
-    target_price = target_mc / shares_count
-    
-    fig.add_trace(go.Scatter(
-        x=df_price.index,
-        y=target_price,
-        mode='lines',
-        name=f'POR {por}x',
-        line=dict(color=colors[idx % len(colors)], width=1.5, dash='dash')
-    ))
+fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['수정_POR'], mode='lines', name='POR (실시간)', line=dict(color='#FFFFFF', width=2)))
+fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['+2σ'], mode='lines', name='+2σ (상단)', line=dict(color='#FF5555', width=1.5, dash='dash')))
+fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['+1σ'], mode='lines', name='+1σ', line=dict(color='#FFB86C', width=1.5, dash='dot')))
+fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['Mean'], mode='lines', name='Mean (평균)', line=dict(color='#50FA7B', width=2, dash='solid')))
+fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['-1σ'], mode='lines', name='-1σ', line=dict(color='#8BE9FD', width=1.5, dash='dot')))
+fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['-2σ'], mode='lines', name='-2σ (하단)', line=dict(color='#BD93F9', width=1.5, dash='dash')))
 
 fig.update_layout(
-    title=f"{selected_stock} ({stock_code}) POR 밴드 차트",
-    xaxis_title="날짜",
-    yaxis_title="주가 (원)",
+    title=dict(text=f"<b>{selected_stock} {start_date.year}년 1월 ~ 현재 POR 밴드 차트</b>", font=dict(color='#FFFFFF', size=20)),
+    paper_bgcolor='#1E1E1E',
+    plot_bgcolor='#141414',
+    font=dict(color='#FFFFFF'),
+    xaxis=dict(title="날짜", showgrid=True, gridcolor='#333333', color='#FFFFFF'),
+    yaxis=dict(title="POR", showgrid=True, gridcolor='#333333', color='#FFFFFF'),
     hovermode="x unified",
-    template="plotly_white",
-    height=600
+    height=600,
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color='#FFFFFF'))
 )
 
 st.plotly_chart(fig, use_container_width=True)
