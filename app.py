@@ -19,7 +19,7 @@ JSON_FILE = 'custom_stocks.json'
 # ==========================================
 # 🔑 Open DART API 키 설정 (무료 발급 필요)
 # https://opendart.fss.or.kr/ 에서 인증키 신청
-DART_API_KEY = "YOUR_DART_API_KEY_HERE" 
+DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105" 
 # ==========================================
 
 DEFAULT_STOCKS = {
