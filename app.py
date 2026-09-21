@@ -68,19 +68,36 @@ def load_stocks_data_from_kvdb():
 
 def save_stocks_data_to_kvdb(data):
     try:
-        res = requests.post(
+        # KVdb.io 데이터 저장 시 POST 대신 PUT 메서드를 주로 사용합니다.
+        # JSON 직렬화 및 UTF-8 인코딩 명시
+        payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        
+        # PUT 요청으로 변경
+        res = requests.put(
             KVDB_FULL_URL,
-            data=json.dumps(data, ensure_ascii=False),
-            headers={"Content-Type": "application/json"},
+            data=payload,
+            headers=headers,
             timeout=5
         )
+        
+        # 만약 PUT이 거부될 경우(405 등) fallback으로 POST 시도
+        if res.status_code not in [200, 201]:
+            res = requests.post(
+                KVDB_FULL_URL,
+                data=payload,
+                headers=headers,
+                timeout=5
+            )
+
         if res.status_code in [200, 201]:
             return True
         else:
             st.sidebar.error(f"KVdb 저장 실패 (상태 코드: {res.status_code})")
+            return False
     except Exception as e:
         st.sidebar.error(f"KVdb 저장 중 오류 발생: {e}")
-    return False
+        return False
 
 # Session State 초기화
 if 'stock_categories' not in st.session_state:
