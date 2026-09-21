@@ -19,7 +19,7 @@ st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
 # 🔑 KVdb 및 Open DART 고정 설정
-KVDB_FULL_URL = "https://kvdb.io/MzdTavSteRuyBzBFpDorrt/por_stock_data"
+KVDB_FULL_URL = "https://kvdb.io/4BFguH7NDFgCn3svCXBV8v/por_stock_data"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
@@ -118,7 +118,7 @@ krx_df = get_krx_stock_list()
 def get_dart_corp_code_map(api_key):
     corp_map = {}
     clean_key = str(api_key).strip()
-    if not clean_key or clean_key == "YOUR_DART_API_KEY_HERE":
+    if not clean_key or clean_key == "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip();
         return corp_map
     
     url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={clean_key}"
