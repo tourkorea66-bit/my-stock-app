@@ -222,7 +222,7 @@ with st.sidebar.expander("📁 카테고리 추가"):
             st.success(f"'{new_cat_name}' 카테고리가 생성되었습니다.")
             st.rerun()
 
-# --- ➕ 신규 종목 추가 (복구 완료) ---
+# --- ➕ 신규 종목 추가 ---
 with st.sidebar.expander("➕ 신규 종목 추가"):
     if not krx_df.empty:
         search_options = [f"{row['Name']} ({row['Code']})" for _, row in krx_df.iterrows() if 'Name' in row and 'Code' in row]
@@ -296,6 +296,8 @@ st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)"
 final_ops = {}
 p_cols = st.columns(len(past_years))
 
+has_negative_op = False  # 적자 포함 여부 확인용 플래그
+
 for idx, yr in enumerate(past_years):
     with p_cols[idx]:
         val_input = st.number_input(
@@ -308,6 +310,13 @@ for idx, yr in enumerate(past_years):
         st.session_state.ops_data[selected_stock][yr] = val_input
         st.session_state.stock_categories[selected_category][selected_stock]['ops'][yr] = val_input
         final_ops[yr] = val_input * 100_000_000.0
+        
+        # 🔴 [추가] 영업이익 마이너스 시 빨간색 강조 표시
+        if val_input < 0:
+            st.markdown(f"<p style='color: #FF4B4B; font-weight: bold; margin-top: -10px;'>🔴 {val_input:,.1f} 억 (적자)</p>", unsafe_allow_html=True)
+            has_negative_op = True
+        else:
+            st.markdown(f"<p style='color: #00C853; font-size: 0.85em; margin-top: -10px;'>🟢 흑자</p>", unsafe_allow_html=True)
 
 f_cols = st.columns(4)
 with f_cols[0]:
@@ -321,6 +330,17 @@ with f_cols[0]:
     st.session_state.ops_data[selected_stock]['2026'] = input_2026
     st.session_state.stock_categories[selected_category][selected_stock]['ops']['2026'] = input_2026
     final_ops['2026'] = input_2026 * 100_000_000.0
+    
+    # 🔴 [추가] 2026년 영업이익 마이너스 시 빨간색 강조 표시
+    if input_2026 < 0:
+        st.markdown(f"<p style='color: #FF4B4B; font-weight: bold; margin-top: -10px;'>🔴 {input_2026:,.1f} 억 (적자 추정)</p>", unsafe_allow_html=True)
+        has_negative_op = True
+    else:
+        st.markdown(f"<p style='color: #00C853; font-size: 0.85em; margin-top: -10px;'>🟢 흑자 추정</p>", unsafe_allow_html=True)
+
+# 🔴 적자 연도가 존재할 경우 사용자에게 알림 표시
+if has_negative_op:
+    st.warning("⚠️ 영업이익이 적자(마이너스)인 구간은 POR 산출 공식상 'N/A' 처리되어 차트선이 연결되지 않을 수 있습니다.")
 
 # ==================== 주가 데이터 수집 ====================
 end_date = datetime.today()
