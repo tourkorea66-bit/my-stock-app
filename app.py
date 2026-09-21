@@ -20,10 +20,11 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 페이지 기본 설정
-st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
+st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CORP_CODE_CACHE_FILE = os.path.join(BASE_DIR, 'corp_code_map.json')
+LOCAL_STORAGE_FILE = os.path.join(BASE_DIR, 'stocks_data.json')
 
 # ==========================================
 # 🔑 Open DART API 키 설정
@@ -47,53 +48,47 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- 🌐 kvdb.io 저장소 로드/저장 로직 ---
+# --- 데이터 저장/로드 로직 (로컬 파일 최우선) ---
 def load_stocks_data_public():
+    if os.path.exists(LOCAL_STORAGE_FILE):
+        try:
+            with open(LOCAL_STORAGE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict) and len(data) > 0:
+                    return data
+        except Exception as e:
+            st.sidebar.warning(f"로컬 파일 읽기 오류: {e}")
+
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
+        headers = {"User-Agent": "Mozilla/5.0"}
         fetch_url = f"{SHARED_STORE_URL}?_t={int(time.time())}"
-        res = requests.get(fetch_url, headers=headers, timeout=5, verify=False)
-        
-        # 200 OK 응답 및 텍스트가 비어있지 않은 경우 파싱
+        res = requests.get(fetch_url, headers=headers, timeout=3, verify=False)
         if res.status_code == 200 and res.text.strip():
             data = res.json()
             if isinstance(data, dict) and len(data) > 0:
                 return data
-    except json.JSONDecodeError:
-        # 빈 데이터나 HTML 에러 응답 시 예외 처리
-        pass
-    except Exception as e:
-        st.sidebar.info("온라인 저장소 연결 불가. 기본 설정 데이터를 사용합니다.")
-    return DEFAULT_STOCKS.copy()
-
-def save_stocks_data_public(data):
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-    json_bytes = json.dumps(data, ensure_ascii=False).encode('utf-8')
-    
-    # 1차 시도: POST 요청
-    try:
-        res = requests.post(SHARED_STORE_URL, data=json_bytes, headers=headers, timeout=5, verify=False)
-        if res.status_code in [200, 201, 204]:
-            return True
     except Exception:
         pass
 
-    # 2차 시도: PUT 요청
+    return DEFAULT_STOCKS.copy()
+
+def save_stocks_data_public(data):
+    success = False
     try:
-        res = requests.put(SHARED_STORE_URL, data=json_bytes, headers=headers, timeout=5, verify=False)
-        if res.status_code in [200, 201, 204]:
-            return True
-        else:
-            st.sidebar.error(f"저장 실패 (HTTP {res.status_code}): {res.text[:100]}")
-            return False
+        with open(LOCAL_STORAGE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        success = True
     except Exception as e:
-        st.sidebar.error(f"네트워크/저장 오류: {e}")
-        return False
+        st.sidebar.error(f"로컬 저장 실패: {e}")
+
+    try:
+        headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+        json_bytes = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        requests.post(SHARED_STORE_URL, data=json_bytes, headers=headers, timeout=3, verify=False)
+    except Exception:
+        pass
+
+    return success
 
 # Session State 초기화
 if 'stock_categories' not in st.session_state:
@@ -197,7 +192,7 @@ if st.sidebar.button("🔄 데이터 다시 불러오기"):
 
 if st.sidebar.button("💾 변경사항 전체 저장", type="primary"):
     if save_stocks_data_public(st.session_state.stock_categories):
-        st.sidebar.success("저장소에 성공적으로 저장되었습니다!")
+        st.sidebar.success("성공적으로 저장되었습니다!")
 
 if DART_API_KEY == "YOUR_DART_API_KEY_HERE":
     dart_key_input = st.sidebar.text_input("🔑 Open DART API 키 입력", type="password")
@@ -242,7 +237,10 @@ if not category_list:
 
 selected_category = st.sidebar.selectbox("카테고리 선택:", category_list)
 available_stocks = st.session_state.stock_categories[selected_category]
-selected_stock = st.sidebar.selectbox("종목 선택:", list(available_stocks.keys()))
+
+# 세션에 삭제/이동 반영 시 KeyError 방지
+stock_names = list(available_stocks.keys())
+selected_stock = st.sidebar.selectbox("종목 선택:", stock_names)
 
 stock_info = available_stocks[selected_stock]
 stock_code = stock_info['code']
@@ -262,17 +260,14 @@ saved_ops = stock_info.get('ops', {})
 if selected_stock not in st.session_state.ops_data:
     st.session_state.ops_data[selected_stock] = {}
     
-    # DART API를 통해 전체 연도 데이터 수집
     dart_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
     
-    # 1. 과거 실적 (2021 ~ 2025)
     for yr in past_years:
         if yr in saved_ops and saved_ops[yr] != 0.0:
             st.session_state.ops_data[selected_stock][yr] = float(saved_ops[yr])
         else:
             st.session_state.ops_data[selected_stock][yr] = float(dart_ops.get(yr, 0.0) / 100_000_000.0)
             
-    # 2. 2026년 추정치 (저장된 값이 없으면 DART 수집값 또는 0.0)
     if '2026' in saved_ops and saved_ops['2026'] != 0.0:
         st.session_state.ops_data[selected_stock]['2026'] = float(saved_ops['2026'])
     else:
@@ -380,7 +375,6 @@ valid_por = stock_df['수정_POR'].dropna()
 
 st.subheader("⚙️ POR 배수 범위 설정")
 
-# 배수 기본값 계산
 if not valid_por.empty and len(valid_por) > 0:
     min_por_val = float(valid_por.min())
     max_por_val = float(valid_por.max())
@@ -401,22 +395,18 @@ with col_b2:
 with col_b3:
     por_high = st.number_input("고평가 배수 (High)", value=round(high_default, 1), step=0.5, format="%.1f")
 
-# 밴드 가격 계산
 stock_df['Band_Low'] = np.where(stock_df['수정_영업이익'] > 0, (stock_df['수정_영업이익'] * por_low) / (stock_df['시가총액'] / stock_df['종가']), np.nan)
 stock_df['Band_Mid'] = np.where(stock_df['수정_영업이익'] > 0, (stock_df['수정_영업이익'] * por_mid) / (stock_df['시가총액'] / stock_df['종가']), np.nan)
 stock_df['Band_High'] = np.where(stock_df['수정_영업이익'] > 0, (stock_df['수정_영업이익'] * por_high) / (stock_df['시가총액'] / stock_df['종가']), np.nan)
 
-# 차트 그리기
 st.subheader("📈 주가 및 POR 밴드 차트")
 
 fig = go.Figure()
 
-# 밴드 라인들
 fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['Band_High'], mode='lines', name=f'POR {por_high}x (고평가)', line=dict(color='rgba(239, 83, 80, 0.7)', width=1.5, dash='dash')))
 fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['Band_Mid'], mode='lines', name=f'POR {por_mid}x (적정)', line=dict(color='rgba(255, 179, 0, 0.8)', width=1.5, dash='dot')))
 fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['Band_Low'], mode='lines', name=f'POR {por_low}x (저평가)', line=dict(color='rgba(102, 187, 106, 0.7)', width=1.5, dash='dash')))
 
-# 실제 주가
 fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['종가'], mode='lines', name='실제 주가', line=dict(color='#2962FF', width=2.5)))
 
 fig.update_layout(
@@ -431,7 +421,6 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# 현재 시점 기준 요약 리포트
 latest_row = stock_df.iloc[-1]
 latest_price = latest_row['종가']
 latest_por = latest_row['수정_POR']
