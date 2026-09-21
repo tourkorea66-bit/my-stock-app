@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import FinanceDataReader as fdr
 
 # 페이지 기본 설정
-st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
+st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
 # 🔑 고정 KVdb 엔드포인트 및 DART API 키 설정
