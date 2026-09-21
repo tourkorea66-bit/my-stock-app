@@ -19,19 +19,18 @@ import FinanceDataReader as fdr
 st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
-# 🔑 KVdb 및 Open DART 고정 설정
-BUCKET_ID = "4BFguH7NDFgCn3svCXBV8v"
-# ⚠️ KVdb 대시보드(Edit Bucket Policy)의 'Write Key' 항목에 설정하신 비밀키를 입력합니다.
-WRITE_KEY = "mysecretkey1234".strip()
+# 🔑 JSONBin.io 및 Open DART 설정
+JSONBIN_BIN_ID = "6ab0e792ac6210605ae50647".strip()
+JSONBIN_API_KEY = "6ab0e6db7e19fe510f3930a4".strip()
 
-KVDB_FULL_URL = f"https://kvdb.io/{BUCKET_ID}/por_stock_data"
+JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
 DEFAULT_STOCKS = {
     '반도체': {
-        'SK하이닉스': {'code': '000660', 'ops': {}},
-        '티엘비': {'code': '356860', 'ops': {}},
+        'SK하이닉스': {'code': '000660', 'ops': {'2021': 124103.0, '2022': 68094.0, '2023': -77303.0, '2024': 234673.0, '2025': 0.0, '2026': 0.0}},
+        '티엘비': {'code': '356860', 'ops': {'2021': 134.0, '2022': 384.0, '2023': 31.0, '2024': 150.0, '2025': 0.0, '2026': 0.0}},
         '엠케이전자': {'code': '033160', 'ops': {}},
         'ISC': {'code': '095340', 'ops': {}},
         '엘티씨': {'code': '170920', 'ops': {}},
@@ -43,14 +42,19 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- 🔄 KVdb 로드 / 저장 함수 ---
+# --- 🔄 JSONBin 로드 / 저장 함수 ---
 def load_stocks_data_from_kvdb():
     base_data = copy.deepcopy(DEFAULT_STOCKS)
+    headers = {
+        "X-Master-Key": JSONBIN_API_KEY
+    }
     try:
-        res = requests.get(KVDB_FULL_URL, timeout=5)
+        res = requests.get(f"{JSONBIN_URL}/latest", headers=headers, timeout=5)
         if res.status_code == 200:
-            saved_data = res.json()
-            if isinstance(saved_data, dict):
+            result = res.json()
+            saved_data = result.get('record', {})
+            
+            if isinstance(saved_data, dict) and saved_data:
                 for cat, stocks in saved_data.items():
                     if cat not in base_data:
                         base_data[cat] = {}
@@ -67,48 +71,33 @@ def load_stocks_data_from_kvdb():
                                 ops = {}
                             base_data[cat][name] = {'code': code, 'ops': ops}
             return base_data
+        else:
+            st.sidebar.error(f"데이터 불러오기 실패 (상태 코드: {res.status_code})")
     except Exception as e:
-        st.sidebar.error(f"KVdb 데이터 불러오기 실패: {e}")
+        st.sidebar.error(f"JSONBin 데이터 불러오기 오류: {e}")
     return base_data
 
 def save_stocks_data_to_kvdb(data):
     try:
-        payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
-        headers = {"Content-Type": "application/json; charset=utf-8"}
-        
-        # KVdb의 인증 호환성을 위해 Query Param 방식 및 Header/Auth 방식을 다각도로 시도
-        url_with_key = f"{KVDB_FULL_URL}?secret={WRITE_KEY}"
-        
-        # 1. Query Param PUT 시도
-        res = requests.put(url_with_key, data=payload, headers=headers, timeout=5)
-        
-        # 2. 실패시 Basic Auth (비밀번호 위치에 Write Key 설정) 시도
-        if res.status_code not in [200, 201]:
-            res = requests.put(
-                KVDB_FULL_URL,
-                data=payload,
-                headers=headers,
-                auth=('', WRITE_KEY),
-                timeout=5
-            )
-            
-        # 3. 실패시 POST 시도
-        if res.status_code not in [200, 201]:
-            res = requests.post(
-                url_with_key,
-                data=payload,
-                headers=headers,
-                timeout=5
-            )
+        if not data:
+            data = copy.deepcopy(DEFAULT_STOCKS)
 
-        if res.status_code in [200, 201]:
-            st.sidebar.success("KVdb 동기화 완료!")
+        headers = {
+            "Content-Type": "application/json",
+            "X-Master-Key": JSONBIN_API_KEY
+        }
+        
+        res = requests.put(JSONBIN_URL, json=data, headers=headers, timeout=5)
+        
+        if res.status_code == 200:
+            st.sidebar.success("JSONBin 동기화 완료!")
             return True
         else:
-            st.sidebar.error(f"KVdb 저장 실패 (상태 코드: {res.status_code})")
+            err_msg = res.json().get('message', res.text)
+            st.sidebar.error(f"저장 실패 (코드 {res.status_code}): {err_msg}")
             return False
     except Exception as e:
-        st.sidebar.error(f"KVdb 저장 중 오류 발생: {e}")
+        st.sidebar.error(f"JSONBin 저장 중 오류 발생: {e}")
         return False
 
 # Session State 초기화
@@ -201,14 +190,14 @@ def fetch_operating_profit_dart(code, api_key):
     return ops
 
 # ==================== 사이드바 ====================
-st.sidebar.title("⚙️ KVdb 및 종목 관리")
+st.sidebar.title("⚙️ JSONBin 및 종목 관리")
 
-if st.sidebar.button("🔄 KVdb에서 데이터 불러오기"):
+if st.sidebar.button("🔄 JSONBin에서 데이터 불러오기"):
     st.session_state.stock_categories = load_stocks_data_from_kvdb()
-    st.sidebar.success("KVdb에서 최신 데이터를 불러왔습니다.")
+    st.sidebar.success("최신 데이터를 불러왔습니다.")
     st.rerun()
 
-if st.sidebar.button("💾 전체 데이터 KVdb에 저장", type="primary"):
+if st.sidebar.button("💾 전체 데이터 JSONBin에 저장", type="primary"):
     save_stocks_data_to_kvdb(st.session_state.stock_categories)
 
 # --- 📁 카테고리 추가 ---
