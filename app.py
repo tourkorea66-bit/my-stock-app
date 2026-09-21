@@ -118,7 +118,7 @@ krx_df = get_krx_stock_list()
 def get_dart_corp_code_map(api_key):
     corp_map = {}
     clean_key = str(api_key).strip()
-    if not clean_key or clean_key == "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip();
+    if not clean_key or clean_key == "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
         return corp_map
     
     url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={clean_key}"
