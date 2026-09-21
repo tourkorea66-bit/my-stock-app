@@ -15,12 +15,12 @@ import xml.etree.ElementTree as ET
 # 페이지 기본 설정
 st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
 
-JSON_FILE = 'custom_stocks.json'
+# JSON 파일 경로 안전하게 지정
+JSON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'custom_stocks.json')
 
 # ==========================================
-# 🔑 Open DART API 키 설정 (무료 발급 필요)
-# https://opendart.fss.or.kr/ 에서 인증키 신청
-DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105" 
+# 🔑 Open DART API 키 설정 (.strip()으로 보이지 않는 특수공백 제거)
+DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip() 
 # ==========================================
 
 DEFAULT_STOCKS = {
@@ -38,7 +38,7 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- JSON 저장/로드 ---
+# --- JSON 저장/로드 (리셋 문제 수정) ---
 def load_stocks_data():
     if os.path.exists(JSON_FILE):
         try:
@@ -53,13 +53,19 @@ def load_stocks_data():
                         else:
                             cleaned_data[cat][name] = val
                 return cleaned_data
-        except Exception:
+        except Exception as e:
             return DEFAULT_STOCKS.copy()
-    return DEFAULT_STOCKS.copy()
+    else:
+        # 파일이 없으면 기본값을 파일로 생성 저장
+        save_stocks_data(DEFAULT_STOCKS)
+        return DEFAULT_STOCKS.copy()
 
 def save_stocks_data(data):
-    with open(JSON_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+    try:
+        with open(JSON_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        st.error(f"종목 데이터 저장 중 오류 발생: {e}")
 
 if 'stock_categories' not in st.session_state:
     st.session_state.stock_categories = load_stocks_data()
@@ -82,10 +88,11 @@ krx_df = get_krx_stock_list()
 @st.cache_data(ttl=86400 * 30)
 def get_dart_corp_code_map(api_key):
     corp_map = {}
-    if not api_key or api_key == "YOUR_DART_API_KEY_HERE":
+    clean_key = str(api_key).strip()
+    if not clean_key or clean_key == "YOUR_DART_API_KEY_HERE":
         return corp_map
     
-    url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={api_key}"
+    url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={clean_key}"
     try:
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
@@ -105,11 +112,12 @@ def get_dart_corp_code_map(api_key):
 @st.cache_data(ttl=86400)
 def fetch_operating_profit_dart(code, api_key):
     ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
+    clean_key = str(api_key).strip()
     
-    if not api_key or api_key == "YOUR_DART_API_KEY_HERE":
+    if not clean_key or clean_key == "YOUR_DART_API_KEY_HERE":
         return ops
 
-    corp_map = get_dart_corp_code_map(api_key)
+    corp_map = get_dart_corp_code_map(clean_key)
     corp_code = corp_map.get(str(code).zfill(6))
     
     if not corp_code:
@@ -117,7 +125,7 @@ def fetch_operating_profit_dart(code, api_key):
 
     for b_year in ['2021', '2022', '2023', '2024', '2025']:
         try:
-            url = f"https://opendart.fss.or.kr/api/fnlttSinglAcnt.json?crtfc_key={api_key}&corp_code={corp_code}&bsns_year={b_year}&reprt_code=11011"
+            url = f"https://opendart.fss.or.kr/api/fnlttSinglAcnt.json?crtfc_key={clean_key}&corp_code={corp_code}&bsns_year={b_year}&reprt_code=11011"
             res = requests.get(url, timeout=5)
             data = res.json()
             
@@ -134,7 +142,7 @@ def fetch_operating_profit_dart(code, api_key):
 
     return ops
 
-# --- 올해/내년(2026, 2027) 추정 영업이익(컨센서스) 수집 ---
+# --- 올해/내년(2026, 2027) 추정 영업이익(컨센서스) 파싱 개선 ---
 @st.cache_data(ttl=3600)
 def fetch_consensus_operating_profit(code):
     consensus = {'2026': 0.0, '2027': 0.0}
@@ -152,6 +160,12 @@ def fetch_consensus_operating_profit(code):
         if res.status_code == 200:
             tables = pd.read_html(res.text)
             for tbl in tables:
+                # Multi-index 컬럼 단일화
+                if isinstance(tbl.columns, pd.MultiIndex):
+                    tbl.columns = ['_'.join([str(c) for c in col if 'Unnamed' not in str(c)]).strip() for col in tbl.columns]
+                else:
+                    tbl.columns = [str(c) for c in tbl.columns]
+
                 tbl_str = tbl.to_string()
                 if '영업이익' in tbl_str:
                     for idx, row in tbl.iterrows():
@@ -162,10 +176,10 @@ def fetch_consensus_operating_profit(code):
                                 val = row.iloc[col_idx]
                                 
                                 for yr in consensus.keys():
+                                    # 컬럼 헤더에 연도(예: 2026)가 포함되어 있는지 확인
                                     if yr in col_hdr and pd.notnull(val):
                                         clean_v = re.sub(r'[^0-9.-]', '', str(val))
-                                        if clean_v:
-                                            # 네이버 표기 단위(억원) -> 원 변환
+                                        if clean_v and clean_v != '-':
                                             consensus[yr] = float(clean_v) * 100_000_000.0
                             break
     except Exception:
@@ -179,7 +193,7 @@ st.sidebar.title("⚙️ 카테고리 & 종목 관리")
 if DART_API_KEY == "YOUR_DART_API_KEY_HERE":
     dart_key_input = st.sidebar.text_input("🔑 Open DART API 키 입력", type="password")
     if dart_key_input:
-        DART_API_KEY = dart_key_input
+        DART_API_KEY = dart_key_input.strip()
     else:
         st.sidebar.info("💡 과거 실적 자동 조회를 위해 DART API 키를 입력해주세요.")
 
@@ -203,12 +217,11 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 name = selected_search.split(" (")[0]
                 code = selected_search.split(" (")[1].replace(")", "")
                 
-                exists = any(name in stocks for stocks in st.session_state.stock_categories.values())
-                if not exists:
-                    st.session_state.stock_categories[target_cat][name] = code
-                    save_stocks_data(st.session_state.stock_categories)
-                    st.success(f"'{name}' 종목이 추가되었습니다!")
-                    st.rerun()
+                # 중복 체크 후 추가
+                st.session_state.stock_categories[target_cat][name] = code
+                save_stocks_data(st.session_state.stock_categories)
+                st.success(f"'{name}' 종목이 추가되었습니다!")
+                st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.title("🔍 분석 대상 선택")
