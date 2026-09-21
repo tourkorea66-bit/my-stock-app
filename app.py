@@ -118,12 +118,19 @@ def _fetch_single_year_dart(args):
     b_year, clean_key, corp_code = args
     try:
         url = f"https://opendart.fss.or.kr/api/fnlttSinglAcnt.json?crtfc_key={clean_key}&corp_code={corp_code}&bsns_year={b_year}&reprt_code=11011"
-        res = requests.get(url, timeout=3)
+        res = requests.get(url, timeout=5)
         data = res.json()
         if data.get('status') == '000' and 'list' in data:
             for item in data['list']:
+                acc_id = item.get('account_id', '')
                 account_nm = item.get('account_nm', '')
-                if ('영업이익' in account_nm or '영업손실' in account_nm) and '률' not in account_nm:
+                
+                # account_id 표준 ID 검사 및 계정명 보완 검사
+                is_op = (
+                    'OperatingProfitLoss' in acc_id or
+                    (('영업이익' in account_nm or '영업손실' in account_nm) and '률' not in account_nm and '이익률' not in account_nm)
+                )
+                if is_op:
                     val_str = item.get('thstrm_amount', '0').replace(',', '').strip()
                     if val_str and val_str != '-':
                         return b_year, round(float(val_str) / 100_000_000.0, 1)
@@ -153,36 +160,13 @@ def fetch_operating_profit_dart(code, api_key):
 
     return ops
 
-@st.cache_data(ttl=3600)
-def fetch_consensus_operating_profit(code):
-    consensus = {'2026': 0.0}
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    url = f"https://finance.naver.com/item/coinfoExecutionGrid.naver?code={code}&target=annual"
-    try:
-        res = requests.get(url, headers=headers, timeout=3)
-        if res.status_code == 200:
-            tables = pd.read_html(io.StringIO(res.text))
-            for tbl in tables:
-                if '영업이익' in tbl.to_string():
-                    for idx, row in tbl.iterrows():
-                        if '영업이익' in str(row.iloc[0]) and '률' not in str(row.iloc[0]):
-                            for col_idx in range(1, len(tbl.columns)):
-                                if '2026' in str(tbl.columns[col_idx]) and pd.notnull(row.iloc[col_idx]):
-                                    clean_v = re.sub(r'[^0-9.-]', '', str(row.iloc[col_idx]))
-                                    if clean_v and clean_v != '-':
-                                        consensus['2026'] = float(clean_v)
-                                        return consensus
-    except Exception:
-        pass
-    return consensus
-
 def get_full_stock_ops(code):
-    past_years = ['2021', '2022', '2023', '2024', '2025']
+    all_years = ['2021', '2022', '2023', '2024', '2025']
     hist_ops = fetch_operating_profit_dart(code, DART_API_KEY)
-    est_ops = fetch_consensus_operating_profit(code)
     
-    full_ops = {yr: float(hist_ops.get(yr, 0.0)) for yr in past_years}
-    full_ops['2026'] = float(est_ops.get('2026', 0.0))
+    full_ops = {yr: float(hist_ops.get(yr, 0.0)) for yr in all_years}
+    # 네이버 크롤링 제거: 2026년 추정치는 기본 0.0으로 설정하여 사용자가 trực tiếp 입력하도록 처리
+    full_ops['2026'] = 0.0
     return full_ops
 
 # ==================== 사이드바 ====================
@@ -231,7 +215,7 @@ with st.sidebar.expander("➕ 종목 추가", expanded=True):
                 s_name = selected_item.split(" (")[0]
                 s_code = selected_item.split(" (")[1].replace(")", "")
                 
-                with st.spinner("실적 데이터 수집 중..."):
+                with st.spinner("DART 실적 데이터 수집 중..."):
                     s_ops = get_full_stock_ops(s_code)
                 
                 # 메모리 등록
@@ -269,7 +253,7 @@ st.title(f"📈 [{sel_cat}] {sel_stock} ({cur_code}) POR 밴드 분석")
 
 cur_ops = st.session_state.stock_categories[sel_cat][sel_stock].get('ops', {})
 
-# 실적 실시간 수정 콜백
+# 실적 실시간 수정 콜백 (수정 시 자동으로 session_state 및 KVdb 저장)
 def on_op_change(c, s, y):
     val = st.session_state[f"input_{s}_{y}"]
     st.session_state.stock_categories[c][s]['ops'][y] = val
@@ -281,6 +265,7 @@ st.subheader("📊 연도별 영업이익 (단위: 억원)")
 final_ops = {}
 cols = st.columns(6)
 
+# 2021~2025년 (과거 실적)
 for idx, yr in enumerate(past_years):
     val = float(cur_ops.get(yr, 0.0))
     with cols[idx]:
@@ -291,6 +276,7 @@ for idx, yr in enumerate(past_years):
         )
         final_ops[yr] = v_in * 100_000_000.0
 
+# 2026년 (추정 실적 - 사용자 자유 입력/수정)
 with cols[5]:
     val_26 = float(cur_ops.get('2026', 0.0))
     v_in_26 = st.number_input(
