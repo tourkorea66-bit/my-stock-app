@@ -18,10 +18,8 @@ import FinanceDataReader as fdr
 st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
-# 🔑 KVdb 및 Open DART 설정
-# KVDB_BUCKET_ID: kvdb.io에서 발급받은 버킷 ID를 입력하세요.
-KVDB_BUCKET_ID = "YOUR_KVDB_BUCKET_ID_HERE"
-KVDB_KEY = "por_stock_data"
+# 🔑 고정 KVdb 엔드포인트 및 DART API 키 설정
+KVDB_URL = "https://kvdb.io/MzdTavSteRuyBzBFpDorrt/scripts/por_stock_data"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
@@ -43,12 +41,8 @@ DEFAULT_STOCKS = {
 # --- 🔄 KVdb 로드 / 저장 함수 ---
 def load_stocks_data_from_kvdb():
     base_data = DEFAULT_STOCKS.copy()
-    if not KVDB_BUCKET_ID or KVDB_BUCKET_ID == "YOUR_KVDB_BUCKET_ID_HERE":
-        return base_data
-
-    url = f"https://kvdb.io/{KVDB_BUCKET_ID}/{KVDB_KEY}"
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(KVDB_URL, timeout=5)
         if res.status_code == 200:
             saved_data = res.json()
             for cat, stocks in saved_data.items():
@@ -71,13 +65,13 @@ def load_stocks_data_from_kvdb():
     return base_data
 
 def save_stocks_data_to_kvdb(data):
-    if not KVDB_BUCKET_ID or KVDB_BUCKET_ID == "YOUR_KVDB_BUCKET_ID_HERE":
-        st.sidebar.warning("⚠️ KVdb Bucket ID를 설정해야 저장됩니다.")
-        return False
-
-    url = f"https://kvdb.io/{KVDB_BUCKET_ID}/{KVDB_KEY}"
     try:
-        res = requests.post(url, data=json.dumps(data, ensure_ascii=False), headers={"Content-Type": "application/json"}, timeout=5)
+        res = requests.post(
+            KVDB_URL, 
+            data=json.dumps(data, ensure_ascii=False).encode('utf-8'), 
+            headers={"Content-Type": "application/json; charset=utf-8"}, 
+            timeout=5
+        )
         if res.status_code in [200, 201]:
             return True
         else:
@@ -100,7 +94,7 @@ def get_krx_stock_list():
 
 krx_df = get_krx_stock_list()
 
-# --- DART 고유번호 매핑 로컬 파일 캐싱 ---
+# --- DART 고유번호 매핑 메모리 캐싱 ---
 @st.cache_data(ttl=86400 * 30)
 def get_dart_corp_code_map(api_key):
     corp_map = {}
@@ -199,19 +193,14 @@ def fetch_consensus_operating_profit(code):
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ KVdb 및 종목 관리")
 
-# KVdb Bucket ID 설정
-bucket_input = st.sidebar.text_input("📦 KVdb Bucket ID 입력", value=KVDB_BUCKET_ID if KVDB_BUCKET_ID != "YOUR_KVDB_BUCKET_ID_HERE" else "")
-if bucket_input:
-    KVDB_BUCKET_ID = bucket_input.strip()
-
-if st.sidebar.button("🔄 KVdb에서 데이터 불러오기"):
+if st.sidebar.button("🔄 KVdb에서 데이터 다시 로드"):
     st.session_state.stock_categories = load_stocks_data_from_kvdb()
-    st.sidebar.success("KVdb에서 por_stock_data 데이터를 성공적으로 로드했습니다.")
+    st.sidebar.success("KVdb에서 데이터를 성공적으로 로드했습니다.")
     st.rerun()
 
 if st.sidebar.button("💾 전체 데이터 KVdb에 저장", type="primary"):
     if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-        st.sidebar.success("KVdb (por_stock_data) 저장 완료!")
+        st.sidebar.success("KVdb 저장 완료!")
 
 # --- 📁 카테고리 추가 ---
 with st.sidebar.expander("📁 카테고리 추가"):
@@ -268,7 +257,7 @@ st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드
 past_years = ['2021', '2022', '2023', '2024', '2025']
 saved_ops = stock_info.get('ops', {})
 
-# 저장된 실적이 없으면 API로 자동 로드 후 KVdb에 보관
+# 저장된 실적이 없으면 API로 자동 로드 후 KVdb에 저장
 if not saved_ops:
     hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
     est_ops = fetch_consensus_operating_profit(stock_code)
