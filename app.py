@@ -15,6 +15,10 @@ import numpy as np
 import plotly.graph_objects as go
 import FinanceDataReader as fdr
 
+# SSL 경고 메세지 감추기
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # 페이지 기본 설정
 st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
 
@@ -25,8 +29,7 @@ CORP_CODE_CACHE_FILE = os.path.join(BASE_DIR, 'corp_code_map.json')
 # 🔑 Open DART API 키 설정
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 
-# 🌐 kvdb.io 버킷 URL + 데이터 Key 이름 명시 (수정 완료)
-# 맨 뒤에 'por_stock_data'와 같이 키 이름을 반드시 지정해야 정상 저장이 됩니다.
+# 🌐 kvdb.io 버킷 URL + 데이터 Key 이름 명시
 SHARED_STORE_URL = "https://kvdb.io/15NbjVXrgfHXm7L76LPHPn/por_stock_data"
 # ==========================================
 
@@ -45,36 +48,47 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- 🌐 kvdb.io 저장소 로드/저장 로직 ---
+# --- 🌐 kvdb.io 저장소 로드/저장 로직 (수정 강화) ---
 def load_stocks_data_public():
     try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
         fetch_url = f"{SHARED_STORE_URL}?_t={int(time.time())}"
-        res = requests.get(fetch_url, timeout=5)
+        res = requests.get(fetch_url, headers=headers, timeout=5, verify=False)
         if res.status_code == 200:
             data = res.json()
             if isinstance(data, dict) and len(data) > 0:
                 return data
     except Exception as e:
-        st.sidebar.warning(f"데이터 로드 실패: {e}")
+        st.sidebar.warning(f"데이터 로드 경고: {e}")
     return DEFAULT_STOCKS.copy()
 
 def save_stocks_data_public(data):
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    json_bytes = json.dumps(data, ensure_ascii=False).encode('utf-8')
+    
+    # 1차 시도: PUT 요청
     try:
-        headers = {"Content-Type": "application/json"}
-        # kvdb.io는 덮어쓰기 및 업데이트 시 PUT 메서드가 가장 안정적입니다.
-        res = requests.put(
-            SHARED_STORE_URL, 
-            data=json.dumps(data, ensure_ascii=False).encode('utf-8'), 
-            headers=headers, 
-            timeout=5
-        )
+        res = requests.put(SHARED_STORE_URL, data=json_bytes, headers=headers, timeout=5, verify=False)
+        if res.status_code in [200, 201, 204]:
+            return True
+    except Exception:
+        pass
+
+    # 2차 시도: POST 요청 (PUT 실패 시 Fallback)
+    try:
+        res = requests.post(SHARED_STORE_URL, data=json_bytes, headers=headers, timeout=5, verify=False)
         if res.status_code in [200, 201, 204]:
             return True
         else:
-            st.sidebar.error(f"저장 실패 (응답 코드: {res.status_code})")
+            st.sidebar.error(f"저장 실패 (HTTP {res.status_code}): {res.text[:100]}")
             return False
     except Exception as e:
-        st.sidebar.error(f"저장 중 오류: {e}")
+        st.sidebar.error(f"네트워크/저장 오류: {e}")
         return False
 
 # Session State 초기화
