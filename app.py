@@ -43,7 +43,8 @@ def load_stocks_data_from_kvdb():
     base_data = DEFAULT_STOCKS.copy()
     try:
         res = requests.get(KVDB_URL, timeout=5)
-        if res.status_code == 200:
+        # 응답이 200 OK이고 텍스트가 비어있지 않은 경우에만 JSON 파싱
+        if res.status_code == 200 and res.text.strip():
             saved_data = res.json()
             for cat, stocks in saved_data.items():
                 if cat not in base_data:
@@ -60,6 +61,12 @@ def load_stocks_data_from_kvdb():
                         ops = {}
                     base_data[cat][name] = {'code': code, 'ops': ops}
             return base_data
+        elif res.status_code == 404:
+            # 아직 데이터가 한번도 저장되지 않은 초기 상태
+            return base_data
+    except json.JSONDecodeError:
+        # JSON 해석 실패(빈 응답 등) 시 기본값 사용
+        return base_data
     except Exception as e:
         st.sidebar.error(f"KVdb 데이터 불러오기 실패: {e}")
     return base_data
