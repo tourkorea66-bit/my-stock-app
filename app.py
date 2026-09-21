@@ -17,12 +17,11 @@ import FinanceDataReader as fdr
 # 페이지 기본 설정
 st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-JSON_FILE = os.path.join(BASE_DIR, 'custom_stocks.json')
-CORP_CODE_CACHE_FILE = os.path.join(BASE_DIR, 'corp_code_map.json')
-
 # ==========================================
-# 🔑 Open DART API 키 설정
+# 🔑 KVdb 및 Open DART 설정
+# KVDB_BUCKET_ID: kvdb.io에서 발급받은 버킷 ID를 입력하세요.
+KVDB_BUCKET_ID = "YOUR_KVDB_BUCKET_ID_HERE"
+KVDB_KEY = "por_stock_data"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
@@ -41,48 +40,55 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- 🔄 JSON 로드/병합 로직 ---
-def load_stocks_data():
+# --- 🔄 KVdb 로드 / 저장 함수 ---
+def load_stocks_data_from_kvdb():
     base_data = DEFAULT_STOCKS.copy()
-    if os.path.exists(JSON_FILE):
-        try:
-            with open(JSON_FILE, 'r', encoding='utf-8') as f:
-                saved_data = json.load(f)
-                
-                for cat, stocks in saved_data.items():
-                    if cat not in base_data:
-                        base_data[cat] = {}
-                    for name, val in stocks.items():
-                        if isinstance(val, dict):
-                            code = val.get('code', '')
-                            ops = val.get('ops', {})
-                        elif isinstance(val, list):
-                            code = val[0]
-                            ops = {}
-                        else:
-                            code = str(val)
-                            ops = {}
-                        base_data[cat][name] = {'code': code, 'ops': ops}
-                return base_data
-        except Exception as e:
-            st.sidebar.error(f"설정 파일 읽기 오류: {e}")
-            return base_data
-    else:
-        save_stocks_data(base_data)
+    if not KVDB_BUCKET_ID or KVDB_BUCKET_ID == "YOUR_KVDB_BUCKET_ID_HERE":
         return base_data
 
-def save_stocks_data(data):
+    url = f"https://kvdb.io/{KVDB_BUCKET_ID}/{KVDB_KEY}"
     try:
-        with open(JSON_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-        return True
+        res = requests.get(url, timeout=5)
+        if res.status_code == 200:
+            saved_data = res.json()
+            for cat, stocks in saved_data.items():
+                if cat not in base_data:
+                    base_data[cat] = {}
+                for name, val in stocks.items():
+                    if isinstance(val, dict):
+                        code = val.get('code', '')
+                        ops = val.get('ops', {})
+                    elif isinstance(val, list):
+                        code = val[0]
+                        ops = {}
+                    else:
+                        code = str(val)
+                        ops = {}
+                    base_data[cat][name] = {'code': code, 'ops': ops}
+            return base_data
     except Exception as e:
-        st.sidebar.error(f"종목 저장 중 오류 발생: {e}")
+        st.sidebar.error(f"KVdb 데이터 불러오기 실패: {e}")
+    return base_data
+
+def save_stocks_data_to_kvdb(data):
+    if not KVDB_BUCKET_ID or KVDB_BUCKET_ID == "YOUR_KVDB_BUCKET_ID_HERE":
+        st.sidebar.warning("⚠️ KVdb Bucket ID를 설정해야 저장됩니다.")
         return False
+
+    url = f"https://kvdb.io/{KVDB_BUCKET_ID}/{KVDB_KEY}"
+    try:
+        res = requests.post(url, data=json.dumps(data, ensure_ascii=False), headers={"Content-Type": "application/json"}, timeout=5)
+        if res.status_code in [200, 201]:
+            return True
+        else:
+            st.sidebar.error(f"KVdb 저장 실패 (상태 코드: {res.status_code})")
+    except Exception as e:
+        st.sidebar.error(f"KVdb 저장 중 오류 발생: {e}")
+    return False
 
 # Session State 초기화
 if 'stock_categories' not in st.session_state:
-    st.session_state.stock_categories = load_stocks_data()
+    st.session_state.stock_categories = load_stocks_data_from_kvdb()
 
 # KRX 상장 종목 데이터 (캐싱)
 @st.cache_data(ttl=86400)
@@ -97,13 +103,6 @@ krx_df = get_krx_stock_list()
 # --- DART 고유번호 매핑 로컬 파일 캐싱 ---
 @st.cache_data(ttl=86400 * 30)
 def get_dart_corp_code_map(api_key):
-    if os.path.exists(CORP_CODE_CACHE_FILE):
-        try:
-            with open(CORP_CODE_CACHE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            pass
-
     corp_map = {}
     clean_key = str(api_key).strip()
     if not clean_key or clean_key == "YOUR_DART_API_KEY_HERE":
@@ -121,8 +120,6 @@ def get_dart_corp_code_map(api_key):
                     corp_code = list_item.findtext('corp_code', '').strip()
                     if stock_code and corp_code:
                         corp_map[stock_code.zfill(6)] = corp_code
-            with open(CORP_CODE_CACHE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(corp_map, f)
     except Exception:
         pass
     return corp_map
@@ -140,7 +137,6 @@ def _fetch_single_year_dart(args):
                 if ('영업이익' in account_nm or '영업손실' in account_nm) and '률' not in account_nm:
                     val_str = item.get('thstrm_amount', '0').replace(',', '').strip()
                     if val_str and val_str != '-':
-                        # 원 단위를 '억원' 단위로 환산하여 저장
                         return b_year, round(float(val_str) / 100_000_000.0, 1)
     except Exception:
         pass
@@ -170,13 +166,11 @@ def fetch_operating_profit_dart(code, api_key):
 
     return ops
 
-# --- 올해 추정 영업이익 (네이버 컨센서스: 억원 단위) ---
+# --- 올해 추정 영업이익 (네이버 컨센서스) ---
 @st.cache_data(ttl=3600)
 def fetch_consensus_operating_profit(code):
     consensus = {'2026': 0.0}
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     url = f"https://finance.naver.com/item/coinfoExecutionGrid.naver?code={code}&target=annual"
     
     try:
@@ -195,7 +189,7 @@ def fetch_consensus_operating_profit(code):
                                 if '2026' in col_hdr and pd.notnull(val):
                                     clean_v = re.sub(r'[^0-9.-]', '', str(val))
                                     if clean_v and clean_v != '-':
-                                        consensus['2026'] = float(clean_v) # 네이버 표 상 데이터는 이미 '억원' 단위
+                                        consensus['2026'] = float(clean_v)
                                         return consensus
     except Exception:
         pass
@@ -203,21 +197,21 @@ def fetch_consensus_operating_profit(code):
     return consensus
 
 # ==================== 사이드바 ====================
-st.sidebar.title("⚙️ 카테고리 & 종목 관리")
+st.sidebar.title("⚙️ KVdb 및 종목 관리")
 
-if st.sidebar.button("🔄 파일에서 데이터 다시 로드"):
-    st.session_state.stock_categories = load_stocks_data()
-    st.sidebar.success("custom_stocks.json 데이터 재로드 완료!")
+# KVdb Bucket ID 설정
+bucket_input = st.sidebar.text_input("📦 KVdb Bucket ID 입력", value=KVDB_BUCKET_ID if KVDB_BUCKET_ID != "YOUR_KVDB_BUCKET_ID_HERE" else "")
+if bucket_input:
+    KVDB_BUCKET_ID = bucket_input.strip()
+
+if st.sidebar.button("🔄 KVdb에서 데이터 불러오기"):
+    st.session_state.stock_categories = load_stocks_data_from_kvdb()
+    st.sidebar.success("KVdb에서 por_stock_data 데이터를 성공적으로 로드했습니다.")
     st.rerun()
 
-if st.sidebar.button("💾 전체 종목 구성 및 수치 저장", type="primary"):
-    if save_stocks_data(st.session_state.stock_categories):
-        st.sidebar.success("custom_stocks.json 저장 완료!")
-
-if DART_API_KEY == "YOUR_DART_API_KEY_HERE":
-    dart_key_input = st.sidebar.text_input("🔑 Open DART API 키 입력", type="password")
-    if dart_key_input:
-        DART_API_KEY = dart_key_input.strip()
+if st.sidebar.button("💾 전체 데이터 KVdb에 저장", type="primary"):
+    if save_stocks_data_to_kvdb(st.session_state.stock_categories):
+        st.sidebar.success("KVdb (por_stock_data) 저장 완료!")
 
 # --- 📁 카테고리 추가 ---
 with st.sidebar.expander("📁 카테고리 추가"):
@@ -225,7 +219,7 @@ with st.sidebar.expander("📁 카테고리 추가"):
     if st.button("카테고리 생성"):
         if new_cat_name and new_cat_name not in st.session_state.stock_categories:
             st.session_state.stock_categories[new_cat_name] = {}
-            save_stocks_data(st.session_state.stock_categories)
+            save_stocks_data_to_kvdb(st.session_state.stock_categories)
             st.success(f"'{new_cat_name}' 카테고리가 생성되었습니다.")
             st.rerun()
 
@@ -243,7 +237,7 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 
                 if target_cat in st.session_state.stock_categories:
                     st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': {}}
-                    save_stocks_data(st.session_state.stock_categories)
+                    save_stocks_data_to_kvdb(st.session_state.stock_categories)
                     st.success(f"'{name}' 종목이 추가되었습니다!")
                     st.rerun()
 
@@ -264,7 +258,7 @@ stock_code = stock_info['code']
 
 if st.sidebar.button(f"❌ {selected_stock} 삭제"):
     del st.session_state.stock_categories[selected_category][selected_stock]
-    save_stocks_data(st.session_state.stock_categories)
+    save_stocks_data_to_kvdb(st.session_state.stock_categories)
     st.success(f"{selected_stock} 삭제 완료")
     st.rerun()
 
@@ -274,7 +268,7 @@ st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드
 past_years = ['2021', '2022', '2023', '2024', '2025']
 saved_ops = stock_info.get('ops', {})
 
-# 저장된 실적이 없으면 API로 자동 로드 후 session_state 및 JSON에 보관
+# 저장된 실적이 없으면 API로 자동 로드 후 KVdb에 보관
 if not saved_ops:
     hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
     est_ops = fetch_consensus_operating_profit(stock_code)
@@ -284,7 +278,7 @@ if not saved_ops:
     saved_ops['2026'] = float(est_ops.get('2026', 0.0))
     
     st.session_state.stock_categories[selected_category][selected_stock]['ops'] = saved_ops
-    save_stocks_data(st.session_state.stock_categories)
+    save_stocks_data_to_kvdb(st.session_state.stock_categories)
 
 st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
 
@@ -292,12 +286,12 @@ final_ops = {}
 p_cols = st.columns(len(past_years))
 has_negative_op = False
 
-# 입력값 변경 시 자동 반영 콜백
+# 입력값 변경 시 KVdb 자동 반영 콜백
 def update_op_value(cat, stock, yr):
     widget_key = f"input_{stock}_{yr}"
     new_val = st.session_state[widget_key]
     st.session_state.stock_categories[cat][stock]['ops'][yr] = new_val
-    save_stocks_data(st.session_state.stock_categories)
+    save_stocks_data_to_kvdb(st.session_state.stock_categories)
 
 for idx, yr in enumerate(past_years):
     current_val = float(saved_ops.get(yr, 0.0))
@@ -311,7 +305,6 @@ for idx, yr in enumerate(past_years):
             on_change=update_op_value,
             args=(selected_category, selected_stock, yr)
         )
-        # 차트 계산을 위해 원(KRW) 단위로 환산
         final_ops[yr] = val_input * 100_000_000.0
         
         if val_input < 0:
@@ -367,7 +360,6 @@ stock_df['날짜'] = pd.to_datetime(stock_df['Date'])
 stock_df['종가'] = pd.to_numeric(stock_df['Close'], errors='coerce')
 stock_df['연도'] = stock_df['날짜'].dt.year.astype(str)
 
-# 시가총액 데이터 보정
 if 'Marcap' in stock_df.columns and stock_df['Marcap'].notnull().sum() > 0:
     stock_df['시가총액'] = pd.to_numeric(stock_df['Marcap'], errors='coerce')
 else:
@@ -385,7 +377,7 @@ else:
 stock_df['수정_영업이익'] = stock_df['연도'].map(final_ops)
 stock_df['수정_영업이익'] = pd.to_numeric(stock_df['수정_영업이익'], errors='coerce')
 
-# POR 계산 (영업이익 0 이하 제외)
+# POR 계산
 stock_df['수정_POR'] = np.where(
     (stock_df['수정_영업이익'].notnull()) & (stock_df['수정_영업이익'] > 0) & (stock_df['시가총액'].notnull()),
     stock_df['시가총액'] / stock_df['수정_영업이익'],
@@ -412,7 +404,6 @@ c3.metric(f"평균 POR ({start_date.year}~현재)", f"{mean_val:.2f}")
 c4.metric("표준편차 (STDEV)", f"{std_val:.2f}")
 c5.metric("+2σ 밴드 상단", f"{(mean_val + std_val*2):.2f}")
 
-# 차트 시각화
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['수정_POR'], mode='lines', name='POR (실시간)', line=dict(color='#FFFFFF', width=2)))
 fig.add_trace(go.Scatter(x=stock_df['날짜'], y=stock_df['+2σ'], mode='lines', name='+2σ (상단)', line=dict(color='#FF5555', width=1.5, dash='dash')))
