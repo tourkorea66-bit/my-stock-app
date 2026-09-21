@@ -30,7 +30,7 @@ CORP_CODE_CACHE_FILE = os.path.join(BASE_DIR, 'corp_code_map.json')
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 
 # 🌐 계정 인증 오류를 피하기 위해 신규 공개 키로 변경 완료
-SHARED_STORE_URL = "https://kvdb.io/por_stock_db_2026_shared_v1/por_stock_data"
+SHARED_STORE_URL = "https://149.28.223.197/MzdTavSteRuyBzBFpDorrt/scripts/por_stock_data"
 # ==========================================
 
 DEFAULT_STOCKS = {
