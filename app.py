@@ -19,7 +19,7 @@ st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout
 JSON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'custom_stocks.json')
 
 # ==========================================
-# 🔑 Open DART API 키 설정 (.strip()으로 보이지 않는 특수공백 제거)
+# 🔑 Open DART API 키 설정
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip() 
 # ==========================================
 
@@ -38,7 +38,7 @@ DEFAULT_STOCKS = {
     '관심종목': {}
 }
 
-# --- JSON 저장/로드 (리셋 문제 수정) ---
+# --- JSON 저장/로드 ---
 def load_stocks_data():
     if os.path.exists(JSON_FILE):
         try:
@@ -53,10 +53,9 @@ def load_stocks_data():
                         else:
                             cleaned_data[cat][name] = val
                 return cleaned_data
-        except Exception as e:
+        except Exception:
             return DEFAULT_STOCKS.copy()
     else:
-        # 파일이 없으면 기본값을 파일로 생성 저장
         save_stocks_data(DEFAULT_STOCKS)
         return DEFAULT_STOCKS.copy()
 
@@ -70,17 +69,14 @@ def save_stocks_data(data):
 if 'stock_categories' not in st.session_state:
     st.session_state.stock_categories = load_stocks_data()
 
-# KRX 상장 종목 데이터
+# KRX 상장 종목 데이터 (주식수 및 시가총액 정보 보완)
 @st.cache_data(ttl=86400)
 def get_krx_stock_list():
     try:
         df_krx = fdr.StockListing('KRX')
-        cols = ['Code', 'Name']
-        if 'Stocks' in df_krx.columns:
-            cols.append('Stocks')
-        return df_krx[cols].dropna(subset=['Code', 'Name'])
+        return df_krx
     except Exception:
-        return pd.DataFrame(columns=['Code', 'Name', 'Stocks'])
+        return pd.DataFrame()
 
 krx_df = get_krx_stock_list()
 
@@ -142,10 +138,10 @@ def fetch_operating_profit_dart(code, api_key):
 
     return ops
 
-# --- 올해/내년(2026, 2027) 추정 영업이익(컨센서스) 파싱 개선 ---
+# --- 올해(2026) 추정 영업이익(컨센서스) 수집 ---
 @st.cache_data(ttl=3600)
 def fetch_consensus_operating_profit(code):
-    consensus = {'2026': 0.0, '2027': 0.0}
+    consensus = {'2026': 0.0}
     
     session = requests.Session()
     session.headers.update({
@@ -160,7 +156,6 @@ def fetch_consensus_operating_profit(code):
         if res.status_code == 200:
             tables = pd.read_html(res.text)
             for tbl in tables:
-                # Multi-index 컬럼 단일화
                 if isinstance(tbl.columns, pd.MultiIndex):
                     tbl.columns = ['_'.join([str(c) for c in col if 'Unnamed' not in str(c)]).strip() for col in tbl.columns]
                 else:
@@ -175,12 +170,10 @@ def fetch_consensus_operating_profit(code):
                                 col_hdr = str(tbl.columns[col_idx])
                                 val = row.iloc[col_idx]
                                 
-                                for yr in consensus.keys():
-                                    # 컬럼 헤더에 연도(예: 2026)가 포함되어 있는지 확인
-                                    if yr in col_hdr and pd.notnull(val):
-                                        clean_v = re.sub(r'[^0-9.-]', '', str(val))
-                                        if clean_v and clean_v != '-':
-                                            consensus[yr] = float(clean_v) * 100_000_000.0
+                                if '2026' in col_hdr and pd.notnull(val):
+                                    clean_v = re.sub(r'[^0-9.-]', '', str(val))
+                                    if clean_v and clean_v != '-':
+                                        consensus['2026'] = float(clean_v) * 100_000_000.0
                             break
     except Exception:
         pass
@@ -194,8 +187,6 @@ if DART_API_KEY == "YOUR_DART_API_KEY_HERE":
     dart_key_input = st.sidebar.text_input("🔑 Open DART API 키 입력", type="password")
     if dart_key_input:
         DART_API_KEY = dart_key_input.strip()
-    else:
-        st.sidebar.info("💡 과거 실적 자동 조회를 위해 DART API 키를 입력해주세요.")
 
 with st.sidebar.expander("📁 카테고리 추가"):
     new_cat_name = st.text_input("새 카테고리 이름", key="new_cat_input").strip()
@@ -208,7 +199,7 @@ with st.sidebar.expander("📁 카테고리 추가"):
 
 with st.sidebar.expander("➕ 신규 종목 추가"):
     if not krx_df.empty:
-        search_options = [f"{row['Name']} ({row['Code']})" for _, row in krx_df.iterrows()]
+        search_options = [f"{row['Name']} ({row['Code']})" for _, row in krx_df.iterrows() if 'Name' in row and 'Code' in row]
         selected_search = st.selectbox("KRX 종목 검색:", options=["선택하세요..."] + search_options)
         target_cat = st.selectbox("추가할 카테고리 선택:", list(st.session_state.stock_categories.keys()))
         
@@ -217,7 +208,6 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 name = selected_search.split(" (")[0]
                 code = selected_search.split(" (")[1].replace(")", "")
                 
-                # 중복 체크 후 추가
                 st.session_state.stock_categories[target_cat][name] = code
                 save_stocks_data(st.session_state.stock_categories)
                 st.success(f"'{name}' 종목이 추가되었습니다!")
@@ -248,11 +238,10 @@ st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드
 # DART API 통한 과거 실적 수집
 hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
 
-# 올해 및 내년 추정치 자동 수집
+# 올해(2026) 추정치 자동 수집
 est_ops = fetch_consensus_operating_profit(stock_code)
 
 past_years = ['2021', '2022', '2023', '2024', '2025']
-future_years = ['2026', '2027']
 
 st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
 
@@ -274,21 +263,19 @@ for idx, yr in enumerate(past_years):
 
 st.markdown("---")
 
-st.markdown("**(2) 올해/내년 추정 영업이익 (컨센서스 자동 조회 / 수동 수정 가능)**")
-f_cols = st.columns(len(future_years) + 3)
+st.markdown("**(2) 올해 추정 영업이익 (컨센서스 자동 조회 / 수동 수정 가능)**")
+f_cols = st.columns(4)
 
-for idx, yr in enumerate(future_years):
-    with f_cols[idx]:
-        auto_est_100m = est_ops.get(yr, 0.0) / 100_000_000.0
-        
-        input_100m = st.number_input(
-            f"{yr}년 추정(억원)", 
-            value=float(auto_est_100m), 
-            step=10.0, 
-            format="%.1f",
-            key=f"future_{selected_stock}_{yr}"
-        )
-        final_ops[yr] = input_100m * 100_000_000.0
+with f_cols[0]:
+    auto_est_100m = est_ops.get('2026', 0.0) / 100_000_000.0
+    input_100m = st.number_input(
+        "2026년 추정(억원)", 
+        value=float(auto_est_100m), 
+        step=10.0, 
+        format="%.1f",
+        key=f"future_{selected_stock}_2026"
+    )
+    final_ops['2026'] = input_100m * 100_000_000.0
 
 # 주가 데이터 수집
 end_date = datetime.today()
@@ -309,20 +296,29 @@ if stock_df.empty:
     st.error("불러온 주가 데이터가 없습니다.")
     st.stop()
 
-# Dataframe 가공 및 시가총액 계산
+# Dataframe 가공 및 시가총액 계산 (시가총액 누락 예방 보완)
 stock_df['날짜'] = pd.to_datetime(stock_df['Date'])
 stock_df['종가'] = pd.to_numeric(stock_df['Close'], errors='coerce')
 stock_df['연도'] = stock_df['날짜'].dt.year.astype(str)
 
+# Marcap 컬럼 유무 및 상장주식수 계산 방식 보완
 if 'Marcap' in stock_df.columns and stock_df['Marcap'].notnull().sum() > 0:
     stock_df['시가총액'] = pd.to_numeric(stock_df['Marcap'], errors='coerce')
 else:
-    stock_info_df = krx_df[krx_df['Code'] == stock_code]
-    if not stock_info_df.empty and 'Stocks' in stock_info_df.columns:
-        shares = stock_info_df['Stocks'].values[0]
+    shares = 0
+    if not krx_df.empty and 'Code' in krx_df.columns:
+        matched = krx_df[krx_df['Code'] == stock_code]
+        for col_name in ['Stocks', 'ListingShares', 'Shares']:
+            if col_name in matched.columns and pd.notnull(matched[col_name].values[0]):
+                shares = float(matched[col_name].values[0])
+                break
+    
+    if shares > 0:
         stock_df['시가총액'] = stock_df['종가'] * shares
     else:
-        stock_df['시가총액'] = np.nan
+        # 주식수를 구하지 못한 경우 최신 시가총액 추정치 적용 예비책
+        latest_marcap = stock_df['종가'].iloc[-1]
+        stock_df['시가총액'] = stock_df['종가'] * (latest_marcap / stock_df['종가'].iloc[-1] if stock_df['종가'].iloc[-1] > 0 else 1)
 
 # 영업이익 매핑 및 POR 계산
 stock_df['수정_영업이익'] = stock_df['연도'].map(final_ops)
@@ -349,13 +345,16 @@ stock_df['+2σ'] = mean_val + (std_val * 2)
 stock_df['-1σ'] = mean_val - std_val
 stock_df['-2σ'] = mean_val - (std_val * 2)
 
-# 주요 지표 요약
-c1, c2, c3, c4 = st.columns(4)
+# 주요 지표 요약 (현재 시가총액 포함)
+c1, c2, c3, c4, c5 = st.columns(5)
 latest_close = stock_df['종가'].iloc[-1] if not stock_df.empty else 0
+latest_marcap_val = stock_df['시가총액'].iloc[-1] if not stock_df.empty and pd.notnull(stock_df['시가총액'].iloc[-1]) else 0
+
 c1.metric("최신 종가", f"{latest_close:,.0f} 원")
-c2.metric("5년 평균 POR (Mean)", f"{mean_val:.2f}")
-c3.metric("표준편차 (STDEV)", f"{std_val:.2f}")
-c4.metric("+2σ 밴드 상단", f"{(mean_val + std_val*2):.2f}")
+c2.metric("현재 시가총액", f"{latest_marcap_val / 100_000_000:,.1f} 억원" if latest_marcap_val > 0 else "N/A")
+c3.metric("5년 평균 POR (Mean)", f"{mean_val:.2f}")
+c4.metric("표준편차 (STDEV)", f"{std_val:.2f}")
+c5.metric("+2σ 밴드 상단", f"{(mean_val + std_val*2):.2f}")
 
 # Plotly 차트 시각화
 fig = go.Figure()
