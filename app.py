@@ -55,7 +55,7 @@ def load_stocks_data_from_kvdb():
                                 code = val.get('code', '')
                                 ops = val.get('ops', {})
                             elif isinstance(val, list):
-                                code = val[0]
+                                code = val[0] if len(val) > 0 else ''
                                 ops = {}
                             else:
                                 code = str(val)
@@ -63,12 +63,11 @@ def load_stocks_data_from_kvdb():
                             base_data[cat][name] = {'code': code, 'ops': ops}
             return base_data
     except Exception as e:
-        st.sidebar.warning(f"KVdb 불러오기 임시 실패 (기본값 사용): {e}")
+        st.sidebar.warning(f"KVdb 불러오기 일시 실패 (기본값 로드): {e}")
     return base_data
 
 def save_stocks_data_to_kvdb(data):
     try:
-        # json 전달 시 ensure_ascii=False 및 명시적 utf-8 인코딩 적용
         payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
         headers = {"Content-Type": "application/json; charset=utf-8"}
         res = requests.post(KVDB_URL, data=payload, headers=headers, timeout=5)
@@ -192,6 +191,18 @@ def fetch_consensus_operating_profit(code):
             
     return consensus
 
+# 종목 전체 실적(과거+2026년 추정) 일괄 로드 함수
+def get_full_stock_ops(code):
+    past_years = ['2021', '2022', '2023', '2024', '2025']
+    hist_ops = fetch_operating_profit_dart(code, DART_API_KEY)
+    est_ops = fetch_consensus_operating_profit(code)
+    
+    full_ops = {}
+    for yr in past_years:
+        full_ops[yr] = float(hist_ops.get(yr, 0.0))
+    full_ops['2026'] = float(est_ops.get('2026', 0.0))
+    return full_ops
+
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ KVdb 및 종목 관리")
 
@@ -213,7 +224,6 @@ with st.sidebar.expander("📁 카테고리 추가"):
     if st.button("카테고리 생성"):
         if new_cat_name and new_cat_name not in st.session_state.stock_categories:
             st.session_state.stock_categories[new_cat_name] = {}
-            # 추가 즉시 서버 저장
             save_stocks_data_to_kvdb(st.session_state.stock_categories)
             st.success(f"'{new_cat_name}' 카테고리가 생성되고 저장되었습니다.")
             st.rerun()
@@ -231,13 +241,14 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
                 code = selected_search.split(" (")[1].replace(")", "")
                 
                 if target_cat in st.session_state.stock_categories:
-                    # 종목 추가
-                    st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': {}}
-                    # 추가 즉시 서버 저장
+                    # 💡 추가 시점부터 DART 및 네이버 2026년 추정치를 조회하여 함께 저장
+                    initial_ops = get_full_stock_ops(code)
+                    st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': initial_ops}
+                    
                     if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-                        st.success(f"'{name}' 종목이 추가 및 KVdb에 저장되었습니다!")
+                        st.success(f"'{name}' 종목 및 영업이익(2026년 추정 포함)이 KVdb에 저장되었습니다!")
                     else:
-                        st.warning("화면에는 추가되었으나 KVdb 저장이 원활하지 않습니다.")
+                        st.warning("화면에는 추가되었으나 KVdb 저장 상태를 확인해주세요.")
                     st.rerun()
 
 st.sidebar.markdown("---")
@@ -267,15 +278,9 @@ st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드
 past_years = ['2021', '2022', '2023', '2024', '2025']
 saved_ops = stock_info.get('ops', {})
 
-# 저장된 실적이 없으면 API로 자동 로드 후 KVdb에 저장
-if not saved_ops:
-    hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
-    est_ops = fetch_consensus_operating_profit(stock_code)
-    
-    for yr in past_years:
-        saved_ops[yr] = float(hist_ops.get(yr, 0.0))
-    saved_ops['2026'] = float(est_ops.get('2026', 0.0))
-    
+# 저장된 영업이익 데이터가 없거나 2026년 추정치가 빠진 경우 자동 보완 후 KVdb 저장
+if not saved_ops or '2026' not in saved_ops:
+    saved_ops = get_full_stock_ops(stock_code)
     st.session_state.stock_categories[selected_category][selected_stock]['ops'] = saved_ops
     save_stocks_data_to_kvdb(st.session_state.stock_categories)
 
@@ -285,7 +290,7 @@ final_ops = {}
 p_cols = st.columns(len(past_years))
 has_negative_op = False
 
-# 입력값 변경 시 KVdb 자동 반영 콜백
+# 💡 실적/추정치 입력값 변경 시 KVdb 실시간 자동 반영 콜백
 def update_op_value(cat, stock, yr):
     widget_key = f"input_{stock}_{yr}"
     new_val = st.session_state[widget_key]
