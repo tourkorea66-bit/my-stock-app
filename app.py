@@ -19,7 +19,7 @@ st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
 # 🔑 KVdb 및 Open DART 고정 설정
-KVDB_FULL_URL = "https://kvdb.io/MzdTavSteRuyBzBFpDorrt/scripts/por_stock_data"
+KVDB_FULL_URL = "https://kvdb.io/MzdTavSteRuyBzBFpDorrt/por_stock_data"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
