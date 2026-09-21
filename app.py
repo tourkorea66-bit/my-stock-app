@@ -27,7 +27,7 @@ DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 
 # 🌐 회원가입 없는 오픈 키-값 저장소 (kvdb.io)
 # 남들과 중복되지 않도록 본인만의 고유한 키 이름(예: my_por_data_krx_9981)으로 지정하세요.
-SHARED_STORE_URL = "https://kvdb.io/bucket_por_app_free/my_por_data_krx_9981"
+SHARED_STORE_URL = "https://kvdb.io/bucket_por_app_free/15NbjVXrgfHXm7L76LPHPn"
 # ==========================================
 
 DEFAULT_STOCKS = {
