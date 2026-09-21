@@ -29,7 +29,6 @@ CORP_CODE_CACHE_FILE = os.path.join(BASE_DIR, 'corp_code_map.json')
 # 🔑 Open DART API 키 설정
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 
-# 🌐 계정 인증 오류를 피하기 위해 신규 공개 키로 변경 완료
 SHARED_STORE_URL = "https://149.28.223.197/MzdTavSteRuyBzBFpDorrt/scripts/por_stock_data"
 # ==========================================
 
@@ -160,7 +159,7 @@ def _fetch_single_year_dart(args):
 
 @st.cache_data(ttl=86400)
 def fetch_operating_profit_dart(code, api_key):
-    ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
+    ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0, '2026': 0.0}
     clean_key = str(api_key).strip()
     
     if not clean_key or clean_key == "YOUR_DART_API_KEY_HERE":
@@ -171,46 +170,15 @@ def fetch_operating_profit_dart(code, api_key):
     if not corp_code:
         return ops
 
-    years = ['2021', '2022', '2023', '2024', '2025']
+    years = ['2021', '2022', '2023', '2024', '2025', '2026']
     tasks = [(yr, clean_key, corp_code) for yr in years]
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=6) as executor:
         results = executor.map(_fetch_single_year_dart, tasks)
         for yr, val in results:
             ops[yr] = val
 
     return ops
-
-@st.cache_data(ttl=3600)
-def fetch_consensus_operating_profit(code):
-    consensus = {'2026': 0.0}
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
-    url = f"https://finance.naver.com/item/coinfoExecutionGrid.naver?code={code}&target=annual"
-    
-    try:
-        res = requests.get(url, headers=headers, timeout=3)
-        if res.status_code == 200:
-            tables = pd.read_html(io.StringIO(res.text))
-            for tbl in tables:
-                tbl_str = tbl.to_string()
-                if '영업이익' in tbl_str:
-                    for idx, row in tbl.iterrows():
-                        row_title = str(row.iloc[0])
-                        if '영업이익' in row_title and '률' not in row_title:
-                            for col_idx in range(1, len(tbl.columns)):
-                                col_hdr = str(tbl.columns[col_idx])
-                                val = row.iloc[col_idx]
-                                if '2026' in col_hdr and pd.notnull(val):
-                                    clean_v = re.sub(r'[^0-9.-]', '', str(val))
-                                    if clean_v and clean_v != '-':
-                                        consensus['2026'] = float(clean_v) * 100_000_000.0
-                                        return consensus
-    except Exception:
-        pass
-            
-    return consensus
 
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ 카테고리 & 종목 관리")
@@ -283,28 +251,26 @@ if st.sidebar.button(f"❌ {selected_stock} 삭제"):
 st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드 시뮬레이션")
 
 past_years = ['2021', '2022', '2023', '2024', '2025']
-
 saved_ops = stock_info.get('ops', {})
 
 if selected_stock not in st.session_state.ops_data:
     st.session_state.ops_data[selected_stock] = {}
     
-    # 1. 과거 실적
-    hist_ops = None
+    # DART API를 통해 전체 연도 데이터 수집
+    dart_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
+    
+    # 1. 과거 실적 (2021 ~ 2025)
     for yr in past_years:
         if yr in saved_ops and saved_ops[yr] != 0.0:
             st.session_state.ops_data[selected_stock][yr] = float(saved_ops[yr])
         else:
-            if hist_ops is None:
-                hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
-            st.session_state.ops_data[selected_stock][yr] = float(hist_ops.get(yr, 0.0) / 100_000_000.0)
+            st.session_state.ops_data[selected_stock][yr] = float(dart_ops.get(yr, 0.0) / 100_000_000.0)
             
-    # 2. 2026년 추정치
+    # 2. 2026년 추정치 (저장된 값이 없으면 DART 수집값 또는 0.0)
     if '2026' in saved_ops and saved_ops['2026'] != 0.0:
         st.session_state.ops_data[selected_stock]['2026'] = float(saved_ops['2026'])
     else:
-        est_ops = fetch_consensus_operating_profit(stock_code)
-        st.session_state.ops_data[selected_stock]['2026'] = float(est_ops.get('2026', 0.0) / 100_000_000.0)
+        st.session_state.ops_data[selected_stock]['2026'] = float(dart_ops.get('2026', 0.0) / 100_000_000.0)
 
 st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
 
