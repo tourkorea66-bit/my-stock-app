@@ -21,8 +21,8 @@ st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 # ==========================================
 # 🔑 KVdb 및 Open DART 고정 설정
 BUCKET_ID = "4BFguH7NDFgCn3svCXBV8v"
-# ⚠️ KVdb 대시보드(Edit Bucket Policy)의 'Write Key' 항목에 설정하신 비밀키를 적어주세요.mysecretkey1234
-WRITE_KEY = "mysecretkey1234"  
+# ⚠️ KVdb 대시보드(Edit Bucket Policy)의 'Write Key' 항목에 설정하신 비밀키를 입력합니다.
+WRITE_KEY = "mysecretkey1234".strip()
 
 KVDB_FULL_URL = f"https://kvdb.io/{BUCKET_ID}/por_stock_data"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
@@ -47,7 +47,6 @@ DEFAULT_STOCKS = {
 def load_stocks_data_from_kvdb():
     base_data = copy.deepcopy(DEFAULT_STOCKS)
     try:
-        # Read Key가 설정된 경우 auth=(READ_KEY, '') 추가 가능
         res = requests.get(KVDB_FULL_URL, timeout=5)
         if res.status_code == 200:
             saved_data = res.json()
@@ -77,22 +76,28 @@ def save_stocks_data_to_kvdb(data):
         payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
         headers = {"Content-Type": "application/json; charset=utf-8"}
         
-        # Write Key 인증을 위한 Basic Auth 적용
-        res = requests.put(
-            KVDB_FULL_URL,
-            data=payload,
-            headers=headers,
-            auth=(WRITE_KEY, ''),
-            timeout=5
-        )
+        # KVdb의 인증 호환성을 위해 Query Param 방식 및 Header/Auth 방식을 다각도로 시도
+        url_with_key = f"{KVDB_FULL_URL}?secret={WRITE_KEY}"
         
-        # Fallback POST
+        # 1. Query Param PUT 시도
+        res = requests.put(url_with_key, data=payload, headers=headers, timeout=5)
+        
+        # 2. 실패시 Basic Auth (비밀번호 위치에 Write Key 설정) 시도
         if res.status_code not in [200, 201]:
-            res = requests.post(
+            res = requests.put(
                 KVDB_FULL_URL,
                 data=payload,
                 headers=headers,
-                auth=(WRITE_KEY, ''),
+                auth=('', WRITE_KEY),
+                timeout=5
+            )
+            
+        # 3. 실패시 POST 시도
+        if res.status_code not in [200, 201]:
+            res = requests.post(
+                url_with_key,
+                data=payload,
+                headers=headers,
                 timeout=5
             )
 
