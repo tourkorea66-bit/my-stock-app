@@ -9,6 +9,7 @@ import json
 import requests
 import zipfile
 import io
+import re
 import xml.etree.ElementTree as ET
 
 # 페이지 기본 설정
@@ -100,7 +101,7 @@ def get_dart_corp_code_map(api_key):
         pass
     return corp_map
 
-# --- DART 정식 재무제표 기반 영업이익 수집 ---
+# --- DART 정식 재무제표 기반 과거 영업이익 수집 ---
 @st.cache_data(ttl=86400)
 def fetch_operating_profit_dart(code, api_key):
     ops = {'2021': 0.0, '2022': 0.0, '2023': 0.0, '2024': 0.0, '2025': 0.0}
@@ -114,33 +115,67 @@ def fetch_operating_profit_dart(code, api_key):
     if not corp_code:
         return ops
 
-    # 2021년~2025년 사업보고서(11011) 데이터 조회
     for b_year in ['2021', '2022', '2023', '2024', '2025']:
         try:
-            # 연결재무제표 주요계정 API
             url = f"https://opendart.fss.or.kr/api/fnlttSinglAcnt.json?crtfc_key={api_key}&corp_code={corp_code}&bsns_year={b_year}&reprt_code=11011"
             res = requests.get(url, timeout=5)
             data = res.json()
             
             if data.get('status') == '000' and 'list' in data:
                 for item in data['list']:
-                    # 손익계산서/포괄손익계산서의 영업이익 항목 찾기
                     account_nm = item.get('account_nm', '')
                     if ('영업이익' in account_nm or '영업손실' in account_nm) and '률' not in account_nm:
-                        # thstrm_amount (당기금액)
                         val_str = item.get('thstrm_amount', '0').replace(',', '').strip()
                         if val_str and val_str != '-':
-                            ops[b_year] = float(val_str) # 원 단위
+                            ops[b_year] = float(val_str)
                         break
         except Exception:
             pass
 
     return ops
 
+# --- 올해/내년(2026, 2027) 추정 영업이익(컨센서스) 수집 ---
+@st.cache_data(ttl=3600)
+def fetch_consensus_operating_profit(code):
+    consensus = {'2026': 0.0, '2027': 0.0}
+    
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Referer': f'https://finance.naver.com/item/main.naver?code={code}'
+    })
+    
+    try:
+        url = f"https://finance.naver.com/item/coinfoExecutionGrid.naver?code={code}&target=annual"
+        res = session.get(url, timeout=5)
+        
+        if res.status_code == 200:
+            tables = pd.read_html(res.text)
+            for tbl in tables:
+                tbl_str = tbl.to_string()
+                if '영업이익' in tbl_str:
+                    for idx, row in tbl.iterrows():
+                        row_title = str(row.iloc[0])
+                        if '영업이익' in row_title and '률' not in row_title:
+                            for col_idx in range(1, len(tbl.columns)):
+                                col_hdr = str(tbl.columns[col_idx])
+                                val = row.iloc[col_idx]
+                                
+                                for yr in consensus.keys():
+                                    if yr in col_hdr and pd.notnull(val):
+                                        clean_v = re.sub(r'[^0-9.-]', '', str(val))
+                                        if clean_v:
+                                            # 네이버 표기 단위(억원) -> 원 변환
+                                            consensus[yr] = float(clean_v) * 100_000_000.0
+                            break
+    except Exception:
+        pass
+        
+    return consensus
+
 # ==================== 사이드바 ====================
 st.sidebar.title("⚙️ 카테고리 & 종목 관리")
 
-# API KEY 입력 받기 (설정 안되어 있을 경우 사이드바에서 받아옴)
 if DART_API_KEY == "YOUR_DART_API_KEY_HERE":
     dart_key_input = st.sidebar.text_input("🔑 Open DART API 키 입력", type="password")
     if dart_key_input:
@@ -197,8 +232,11 @@ if st.sidebar.button(f"❌ {selected_stock} 삭제"):
 # ==================== 메인 화면 ====================
 st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드 시뮬레이션")
 
-# DART API 통한 수집
+# DART API 통한 과거 실적 수집
 hist_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
+
+# 올해 및 내년 추정치 자동 수집
+est_ops = fetch_consensus_operating_profit(stock_code)
 
 past_years = ['2021', '2022', '2023', '2024', '2025']
 future_years = ['2026', '2027']
@@ -223,14 +261,16 @@ for idx, yr in enumerate(past_years):
 
 st.markdown("---")
 
-st.markdown("**(2) 올해/내년 추정 영업이익 (수동 입력)**")
+st.markdown("**(2) 올해/내년 추정 영업이익 (컨센서스 자동 조회 / 수동 수정 가능)**")
 f_cols = st.columns(len(future_years) + 3)
 
 for idx, yr in enumerate(future_years):
     with f_cols[idx]:
+        auto_est_100m = est_ops.get(yr, 0.0) / 100_000_000.0
+        
         input_100m = st.number_input(
             f"{yr}년 추정(억원)", 
-            value=0.0, 
+            value=float(auto_est_100m), 
             step=10.0, 
             format="%.1f",
             key=f"future_{selected_stock}_{yr}"
