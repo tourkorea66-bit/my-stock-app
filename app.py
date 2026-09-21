@@ -3,6 +3,7 @@ import json
 import re
 import io
 import zipfile
+import copy
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -15,7 +16,7 @@ import plotly.graph_objects as go
 import FinanceDataReader as fdr
 
 # 페이지 기본 설정
-st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
+st.set_page_config(page_title="KRX 전종목 POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
 # 🔑 고정 KVdb 엔드포인트 및 DART API 키 설정
@@ -40,35 +41,30 @@ DEFAULT_STOCKS = {
 
 # --- 🔄 KVdb 동기화 함수 (LOAD & SAVE) ---
 def load_stocks_data_from_kvdb():
-    base_data = DEFAULT_STOCKS.copy()
+    base_data = copy.deepcopy(DEFAULT_STOCKS)
     try:
         res = requests.get(KVDB_URL, timeout=5)
-        # 응답 상태가 200이고 텍스트 내용이 존재할 때만 안전하게 JSON 파싱
         if res.status_code == 200 and res.text.strip():
             try:
                 saved_data = res.json()
-                if isinstance(saved_data, dict):
+                if isinstance(saved_data, dict) and len(saved_data) > 0:
+                    loaded_categories = {}
                     for cat, stocks in saved_data.items():
-                        if cat not in base_data:
-                            base_data[cat] = {}
+                        loaded_categories[cat] = {}
                         if isinstance(stocks, dict):
                             for name, val in stocks.items():
                                 if isinstance(val, dict):
                                     code = val.get('code', '')
                                     ops = val.get('ops', {})
-                                elif isinstance(val, list):
-                                    code = val[0] if len(val) > 0 else ''
-                                    ops = {}
                                 else:
                                     code = str(val)
                                     ops = {}
-                                base_data[cat][name] = {'code': code, 'ops': ops}
-                return base_data
+                                loaded_categories[cat][name] = {'code': code, 'ops': ops}
+                    return loaded_categories
             except json.JSONDecodeError:
-                # KVdb가 비어있거나 JSON 형식이 아닐 경우 기본값 유지
                 pass
     except Exception as e:
-        st.sidebar.warning(f"KVdb 불러오기 일시 실패 (기본값 로드): {e}")
+        st.sidebar.warning(f"KVdb 연결 오류 (기본값 로드): {e}")
     return base_data
 
 def save_stocks_data_to_kvdb(data):
@@ -76,14 +72,13 @@ def save_stocks_data_to_kvdb(data):
         payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
         headers = {"Content-Type": "application/json; charset=utf-8"}
         res = requests.post(KVDB_URL, data=payload, headers=headers, timeout=5)
-        
         if res.status_code in [200, 201]:
             return True
         else:
             st.sidebar.error(f"KVdb 저장 실패 (응답코드: {res.status_code})")
             return False
     except Exception as e:
-        st.sidebar.error(f"KVdb 저장 중 오류 발생: {e}")
+        st.sidebar.error(f"KVdb 저장 중 오류: {e}")
         return False
 
 # Session State 초기화
@@ -213,55 +208,67 @@ st.sidebar.title("⚙️ KVdb 및 종목 관리")
 
 col_btn1, col_btn2 = st.sidebar.columns(2)
 with col_btn1:
-    if st.button("🔄 불러오기"):
+    if st.button("🔄 불러오기", use_container_width=True):
         st.session_state.stock_categories = load_stocks_data_from_kvdb()
-        st.sidebar.success("로드 완료!")
+        st.sidebar.success("KVdb 데이터 로드 완료!")
         st.rerun()
 
 with col_btn2:
-    if st.button("💾 동기화 저장", type="primary"):
+    if st.button("💾 동기화 저장", type="primary", use_container_width=True):
         if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-            st.sidebar.success("저장 완료!")
+            st.sidebar.success("KVdb 동기화 완료!")
 
 # --- 📁 카테고리 추가 ---
 with st.sidebar.expander("📁 카테고리 추가"):
     new_cat_name = st.text_input("새 카테고리 이름", key="new_cat_input").strip()
-    if st.button("카테고리 생성"):
-        if new_cat_name and new_cat_name not in st.session_state.stock_categories:
-            st.session_state.stock_categories[new_cat_name] = {}
-            save_stocks_data_to_kvdb(st.session_state.stock_categories)
-            st.success(f"'{new_cat_name}' 카테고리가 생성되고 저장되었습니다.")
-            st.rerun()
+    if st.button("카테고리 생성", use_container_width=True):
+        if new_cat_name:
+            if new_cat_name not in st.session_state.stock_categories:
+                st.session_state.stock_categories[new_cat_name] = {}
+                save_stocks_data_to_kvdb(st.session_state.stock_categories)
+                st.success(f"'{new_cat_name}' 카테고리 생성 및 저장 완료!")
+                st.rerun()
 
 # --- ➕ 신규 종목 추가 ---
-with st.sidebar.expander("➕ 신규 종목 추가"):
+with st.sidebar.expander("➕ 신규 종목 추가", expanded=True):
     if not krx_df.empty:
         search_options = [f"{row['Name']} ({row['Code']})" for _, row in krx_df.iterrows() if 'Name' in row and 'Code' in row]
         selected_search = st.selectbox("KRX 종목 검색:", options=["선택하세요..."] + search_options)
-        target_cat = st.selectbox("추가할 카테고리 선택:", list(st.session_state.stock_categories.keys()))
         
-        if st.button("종목 추가"):
+        cat_keys = list(st.session_state.stock_categories.keys())
+        if not cat_keys:
+            st.session_state.stock_categories['관심종목'] = {}
+            cat_keys = ['관심종목']
+            
+        target_cat = st.selectbox("추가할 카테고리 선택:", cat_keys)
+        
+        if st.button("종목 추가 및 KVdb 저장", type="primary", use_container_width=True):
             if selected_search != "선택하세요...":
                 name = selected_search.split(" (")[0]
                 code = selected_search.split(" (")[1].replace(")", "")
                 
-                if target_cat in st.session_state.stock_categories:
-                    # 추가 시점부터 DART 및 네이버 2026년 추정치를 조회하여 함께 저장
+                # 실적 데이터 수집
+                with st.spinner("실적 데이터를 가져오는 중..."):
                     initial_ops = get_full_stock_ops(code)
-                    st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': initial_ops}
-                    
-                    if save_stocks_data_to_kvdb(st.session_state.stock_categories):
-                        st.success(f"'{name}' 종목 및 영업이익(2026년 추정 포함)이 KVdb에 저장되었습니다!")
-                    else:
-                        st.warning("화면에는 추가되었으나 KVdb 저장 상태를 확인해주세요.")
-                    st.rerun()
+                
+                # 세션 데이터 업데이트
+                st.session_state.stock_categories[target_cat][name] = {'code': code, 'ops': initial_ops}
+                
+                # KVdb 즉시 자동 동기화 저장
+                if save_stocks_data_to_kvdb(st.session_state.stock_categories):
+                    st.success(f"✅ '{name}' 종목이 추가되고 KVdb에 저장되었습니다!")
+                else:
+                    st.warning("⚠️ 세션에는 추가되었으나 KVdb 저장에 실패했습니다.")
+                st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.title("🔍 분석 대상 선택")
-category_list = [cat for cat, stocks in st.session_state.stock_categories.items() if stocks]
+
+# 종목이 들어 있는 카테고리 목록
+category_list = [cat for cat, stocks in st.session_state.stock_categories.items() if len(stocks) > 0]
 
 if not category_list:
-    st.warning("등록된 종목이 없습니다. 카테고리나 종목을 추가해주세요.")
+    st.warning("등록된 종목이 없습니다. 사이드바에서 종목을 추가해 주세요.")
     st.stop()
 
 selected_category = st.sidebar.selectbox("카테고리 선택:", category_list)
@@ -271,10 +278,10 @@ selected_stock = st.sidebar.selectbox("종목 선택:", list(available_stocks.ke
 stock_info = available_stocks[selected_stock]
 stock_code = stock_info['code']
 
-if st.sidebar.button(f"❌ {selected_stock} 삭제"):
+if st.sidebar.button(f"❌ {selected_stock} 삭제", use_container_width=True):
     del st.session_state.stock_categories[selected_category][selected_stock]
     save_stocks_data_to_kvdb(st.session_state.stock_categories)
-    st.success(f"{selected_stock} 삭제 및 저장 완료")
+    st.sidebar.info(f"{selected_stock} 삭제 완료")
     st.rerun()
 
 # ==================== 메인 화면 ====================
@@ -283,7 +290,7 @@ st.title(f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드
 past_years = ['2021', '2022', '2023', '2024', '2025']
 saved_ops = stock_info.get('ops', {})
 
-# 저장된 영업이익 데이터가 없거나 2026년 추정치가 빠진 경우 자동 보완 후 KVdb 저장
+# 저장된 영업이익 데이터가 없거나 2026년 추정치가 빠진 경우 자동 보완
 if not saved_ops or '2026' not in saved_ops:
     saved_ops = get_full_stock_ops(stock_code)
     st.session_state.stock_categories[selected_category][selected_stock]['ops'] = saved_ops
