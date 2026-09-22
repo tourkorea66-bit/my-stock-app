@@ -13,11 +13,11 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
-# 1. 페이지 기본 설정 (모바일 스케일링 고려)
+# 1. 페이지 기본 설정
 st.set_page_config(
     page_title="POR 밴드 시뮬레이터",
     layout="wide",
-    initial_sidebar_state="collapsed",  # 모바일 접속 시 화면 확보를 위해 사이드바 접음 기본값
+    initial_sidebar_state="collapsed",
 )
 
 # ==========================================
@@ -28,7 +28,7 @@ JSONBIN_API_KEY = "mysecretkey1234".strip()
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
-# 기본 종목 목록 (JSONBin 최초 접속 실패 시 fallback)
+# 기본 종목 목록
 DEFAULT_STOCKS = {
     '반도체': {
         'SK하이닉스': {'code': '000660', 'op_2026': 0.0},
@@ -111,7 +111,7 @@ def save_stocks_data(data):
     return False
 
 
-# 앱 시작 시 세션 상태에 JSONBin 최신 데이터 로드
+# 세션 상태 로드
 if "stock_categories" not in st.session_state:
   st.session_state.stock_categories = load_stocks_data()
 
@@ -200,7 +200,7 @@ def _fetch_single_year_dart(args):
   return b_year, 0.0
 
 
-# --- DART 과거 5년치 데이터 병렬 수집 (캐싱) ---
+# DART 수집
 @st.cache_data(ttl=3600)
 def fetch_operating_profit_dart(code, api_key):
   ops = {"2021": 0.0, "2022": 0.0, "2023": 0.0, "2024": 0.0, "2025": 0.0}
@@ -225,151 +225,169 @@ def fetch_operating_profit_dart(code, api_key):
   return ops
 
 
-# ==================== 📱 모바일 UX CSS 스타일링 ====================
+# ==================== 📱 모바일 초밀집 스타일링 (CSS) ====================
 st.markdown(
     """
     <style>
-    /* 전체 패딩 모바일 최적화 */
+    /* 여백 최소화 */
     .block-container {
-        padding-top: 1rem !important;
-        padding-bottom: 2rem !important;
-        padding-left: 0.8rem !important;
-        padding-right: 0.8rem !important;
+        padding-top: 0.8rem !important;
+        padding-bottom: 1.5rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
     }
 
-    /* 제목 크기 가독성 개선 */
-    h1 {
-        font-size: 1.25rem !important;
-        font-weight: 700 !important;
-        padding-bottom: 0.3rem !important;
-        margin-bottom: 0.5rem !important;
-        line-height: 1.3 !important;
-    }
-    h3 {
-        font-size: 1.0rem !important;
-        font-weight: 600 !important;
-        margin-top: 0.8rem !important;
-        margin-bottom: 0.4rem !important;
+    h1, h2, h3 {
+        margin: 0.2rem 0 !important;
+        padding: 0 !important;
     }
 
-    /* 모바일 터치 영역 확대를 위한 버튼 및 입력폼 스타일 */
-    div[data-testid="stButton"] button {
-        width: 100% !important;
-        height: 2.8rem !important;
-        font-size: 0.95rem !important;
-        font-weight: bold !important;
-        border-radius: 8px !important;
-    }
-    
-    div[data-testid="stNumberInput"] input {
-        height: 2.5rem !important;
-        font-size: 0.95rem !important;
-    }
-
-    /* Metric 카드 모바일 둥근 테두리 및 배경 감싸기 */
+    /* 촘촘한 Metric 카드 디자인 */
     div[data-testid="stMetric"] {
-        background-color: #262626 !important;
-        padding: 8px 12px !important;
-        border-radius: 8px !important;
-        border: 1px solid #3d3d3d !important;
-        margin-bottom: 6px !important;
+        background-color: #242424 !important;
+        padding: 4px 6px !important;
+        border-radius: 6px !important;
+        border: 1px solid #333333 !important;
+        margin-bottom: 2px !important;
+        min-height: 48px !important;
     }
-    div[data-testid="stMetricLabel"] {
-        font-size: 0.72rem !important;
-        color: #B0B0B0 !important;
+    div[data-testid="stMetricLabel"] p {
+        font-size: 0.68rem !important;
+        color: #AAAAAA !important;
+        line-height: 1.1 !important;
+        margin: 0 !important;
     }
-    div[data-testid="stMetricValue"] {
-        font-size: 1.0rem !important;
+    div[data-testid="stMetricValue"] div {
+        font-size: 0.88rem !important;
         font-weight: bold !important;
+        line-height: 1.2 !important;
+    }
+
+    /* 입력 폼 컴팩트화 */
+    div[data-testid="stNumberInput"] {
+        margin-bottom: 0px !important;
+    }
+    div[data-testid="stNumberInput"] label p {
+        font-size: 0.68rem !important;
+        margin-bottom: 2px !important;
+    }
+    div[data-testid="stNumberInput"] input {
+        height: 1.8rem !important;
+        font-size: 0.8rem !important;
+        padding: 2px 4px !important;
+    }
+
+    /* 선택박스 컴팩트화 */
+    div[data-testid="stSelectbox"] {
+        margin-bottom: 4px !important;
+    }
+    div[data-testid="stSelectbox"] label p {
+        font-size: 0.72rem !important;
+        font-weight: 600 !important;
+        margin-bottom: 2px !important;
+    }
+    div[data-testid="stSelectbox"] div[role="combobox"] {
+        min-height: 2.2rem !important;
+    }
+
+    /* 구분선 및 간격 축소 */
+    hr {
+        margin: 0.4rem 0 !important;
     }
     </style>
 """,
     unsafe_allow_html=True,
 )
 
+# ==================== 🔍 메인 화면 상단 종목 검색/선택 ====================
 
-# ==================== 사이드바 ====================
-st.sidebar.title("⚙️ 종목 및 카테고리 관리")
+st.markdown("### 🔍 종목 선택 및 관리")
 
-# --- 📁 카테고리 추가 ---
-with st.sidebar.expander("📁 카테고리 추가"):
-  new_cat_name = st.text_input("새 카테고리 이름", key="new_cat_input").strip()
-  if st.button("카테고리 생성"):
-    if new_cat_name and new_cat_name not in st.session_state.stock_categories:
-      st.session_state.stock_categories[new_cat_name] = {}
-      save_stocks_data(st.session_state.stock_categories)
-      st.toast(f"'{new_cat_name}' 카테고리가 생성되었습니다.", icon="✅")
-      st.rerun()
+cat_list = [
+    cat for cat, stocks in st.session_state.stock_categories.items() if stocks
+]
+if not cat_list:
+  st.session_state.stock_categories["기본"] = {}
+  cat_list = ["기본"]
 
-# --- ➕ 신규 종목 추가 ---
-with st.sidebar.expander("➕ 신규 종목 추가"):
+top_col1, top_col2 = st.columns([1, 1])
+
+with top_col1:
+  selected_category = st.selectbox(
+      "📁 카테고리", cat_list, key="main_cat_select"
+  )
+
+available_stocks = st.session_state.stock_categories.get(selected_category, {})
+stock_names = list(available_stocks.keys())
+
+with top_col2:
+  if stock_names:
+    selected_stock = st.selectbox(
+        "📈 종목 선택", stock_names, key="main_stock_select"
+    )
+  else:
+    selected_stock = None
+    st.info("종목 없음")
+
+# 신규 종목 추가 Expander (메인 화면 상단)
+with st.expander("➕ KRX 신규 종목 검색 및 추가 / 삭제"):
+  add_col1, add_col2 = st.columns([2, 1])
+
   if not krx_df.empty:
     search_options = [
         f"{row['Name']} ({row['Code']})"
         for _, row in krx_df.iterrows()
         if "Name" in row and "Code" in row
     ]
-    selected_search = st.selectbox(
-        "KRX 종목 검색:", options=["선택하세요..."] + search_options
-    )
-    target_cat = st.selectbox(
-        "추가할 카테고리 선택:",
-        list(st.session_state.stock_categories.keys()),
-    )
+    with add_col1:
+      selected_search = st.selectbox(
+          "KRX 검색", options=["선택..."] + search_options
+      )
 
-    if st.button("종목 추가"):
-      if selected_search != "선택하세요...":
-        name = selected_search.split(" (")[0]
-        code = selected_search.split(" (")[1].replace(")", "")
-
-        if target_cat in st.session_state.stock_categories:
-          st.session_state.stock_categories[target_cat][name] = {
-              "code": code,
+    with add_col2:
+      st.markdown("<div style='height:18px;'></div>", unsafe_allow_html=True)
+      if st.button("추가", use_container_width=True):
+        if selected_search != "선택...":
+          s_name = selected_search.split(" (")[0]
+          s_code = selected_search.split(" (")[1].replace(")", "")
+          st.session_state.stock_categories[selected_category][s_name] = {
+              "code": s_code,
               "op_2026": 0.0,
           }
           save_stocks_data(st.session_state.stock_categories)
-          st.toast(f"'{name}' 종목이 추가되었습니다.", icon="✅")
+          st.toast(f"'{s_name}' 추가 완료", icon="✅")
           st.rerun()
 
-st.sidebar.markdown("---")
-st.sidebar.title("🔍 분석 대상 선택")
-category_list = [
-    cat for cat, stocks in st.session_state.stock_categories.items() if stocks
-]
+  if selected_stock:
+    if st.button(
+        f"🗑️ 현재 종목({selected_stock}) 삭제", use_container_width=True
+    ):
+      del st.session_state.stock_categories[selected_category][selected_stock]
+      save_stocks_data(st.session_state.stock_categories)
+      st.toast(f"'{selected_stock}' 삭제 완료", icon="🗑️")
+      st.rerun()
 
-if not category_list:
+if not selected_stock or selected_stock not in available_stocks:
   st.warning(
-      "등록된 종목이 없습니다. 사이드바 메뉴(좌측 상단 > 버튼)에서 카테고리나"
-      " 종목을 추가해주세요."
+      "선택된 종목이 없습니다. 상단 메인 메뉴에서 종목을 선택하거나 추가해주세요."
   )
   st.stop()
-
-selected_category = st.sidebar.selectbox("카테고리 선택:", category_list)
-available_stocks = st.session_state.stock_categories[selected_category]
-selected_stock = st.sidebar.selectbox("종목 선택:", list(available_stocks.keys()))
 
 stock_info = available_stocks[selected_stock]
 stock_code = stock_info["code"]
 
-if st.sidebar.button(f"❌ {selected_stock} 삭제"):
-  del st.session_state.stock_categories[selected_category][selected_stock]
-  save_stocks_data(st.session_state.stock_categories)
-  st.toast(f"{selected_stock} 삭제 완료", icon="🗑️")
-  st.rerun()
+st.markdown("---")
 
-# ==================== 메인 화면 ====================
+# ==================== 메인 차트 및 실적 표시 ====================
 
-st.title(
-    f"📈 [{selected_category}] {selected_stock} ({stock_code}) POR 밴드"
-)
+st.markdown(f"### 📈 {selected_stock} ({stock_code})")
 
 # DART API를 통한 과거 실적 조회
 with st.spinner("DART 실적 조회 중..."):
   dart_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
 
-st.subheader("📊 연도별 영업이익 (단위: 억원)")
 
-
+# 2026 추정치 업데이트 이벤트
 def update_2026_op(cat, stock):
   widget_key = f"input_{stock}_2026"
   new_val = st.session_state[widget_key]
@@ -379,40 +397,33 @@ def update_2026_op(cat, stock):
 
 
 final_ops = {}
-has_negative_op = False
 past_years = ["2021", "2022", "2023", "2024", "2025"]
 
-# 📱 모바일용 2열 배치 (3행x2열)
-grid_rows = [st.columns(2), st.columns(2), st.columns(2)]
+# 📱 촘촘한 실적 표출 (모바일 대응 3열 x 2행 배치)
+st.markdown("<b>📊 영업이익 (억원)</b>", unsafe_allow_html=True)
+r1_cols = st.columns(3)
+r2_cols = st.columns(3)
+all_cols = r1_cols + r2_cols
 
 for idx, yr in enumerate(past_years):
-  row_idx = idx // 2
-  col_idx = idx % 2
-
   val_dart = float(dart_ops.get(yr, 0.0))
   final_ops[yr] = val_dart * 100_000_000.0
 
-  with grid_rows[row_idx][col_idx]:
-    st.metric(label=f"{yr}년 (DART)", value=f"{val_dart:,.1f} 억")
-    if val_dart < 0:
-      st.markdown(
-          "<p style='color: #FF5555; font-size: 0.7rem; font-weight: bold;"
-          " margin-top: -12px; margin-left: 2px;'>🔴 적자</p>",
-          unsafe_allow_html=True,
-      )
-      has_negative_op = True
-    else:
-      st.markdown(
-          "<p style='color: #50FA7B; font-size: 0.7rem; margin-top: -12px;"
-          " margin-left: 2px;'>🟢 흑자</p>",
-          unsafe_allow_html=True,
-      )
+  with all_cols[idx]:
+    status_tag = (
+        "<span style='color:#FF5555;'>🔴</span>"
+        if val_dart < 0
+        else "<span style='color:#50FA7B;'>🟢</span>"
+    )
+    st.metric(
+        label=f"{yr}년", value=f"{val_dart:,.1f}억 {status_tag}"
+    )
 
-# 2026년 추정치 입력란 (마지막 6번째 그리드)
-with grid_rows[2][1]:
+# 2026년 추정치 (6번째 배치)
+with all_cols[5]:
   current_2026_val = float(stock_info.get("op_2026", 0.0))
   input_2026 = st.number_input(
-      "2026년 추정(억)",
+      "26년 추정(억)",
       value=current_2026_val,
       step=10.0,
       format="%.1f",
@@ -422,24 +433,7 @@ with grid_rows[2][1]:
   )
   final_ops["2026"] = input_2026 * 100_000_000.0
 
-  if input_2026 < 0:
-    st.markdown(
-        "<p style='color: #FF5555; font-size: 0.7rem; font-weight: bold;"
-        " margin-top: -4px;'>🔴 적자 추정</p>",
-        unsafe_allow_html=True,
-    )
-    has_negative_op = True
-  else:
-    st.markdown(
-        "<p style='color: #50FA7B; font-size: 0.7rem;"
-        " margin-top: -4px;'>🟢 흑자 추정</p>",
-        unsafe_allow_html=True,
-    )
-
-if has_negative_op:
-  st.caption("⚠️ 영업이익 적자 구간은 POR 차트선이 연결되지 않을 수 있습니다.")
-
-# ==================== 주가 데이터 수집 ====================
+# ==================== 주가 데이터 수집 및 계산 ====================
 end_date = datetime.today()
 start_date = datetime(end_date.year - 5, 1, 1)
 
@@ -455,7 +449,7 @@ def get_stock_data_api(code, start, end):
 try:
   stock_df = get_stock_data_api(stock_code, start_date, end_date)
 except Exception as e:
-  st.error(f"주가 데이터 불러오기 실패: {e}")
+  st.error(f"주가 불러오기 실패: {e}")
   st.stop()
 
 if stock_df.empty:
@@ -508,10 +502,12 @@ stock_df["+2σ"] = mean_val + (std_val * 2)
 stock_df["-1σ"] = mean_val - std_val
 stock_df["-2σ"] = mean_val - (std_val * 2)
 
-# 📱 주요 지표 요약 (모바일 대응 2행 그리드)
-st.subheader("📌 주요 지표 요약")
-m_row1 = st.columns(2)
-m_row2 = st.columns(3)
+# 📱 주요 지표 요약 (초밀집 4열 1행 / 모바일 유연 배치)
+st.markdown(
+    "<div style='margin-top: 6px;'><b>📌 주요 지표 요약</b></div>",
+    unsafe_allow_html=True,
+)
+m_cols = st.columns(4)
 
 latest_close = stock_df["종가"].iloc[-1] if not stock_df.empty else 0
 latest_marcap_val = (
@@ -520,22 +516,19 @@ latest_marcap_val = (
     else 0
 )
 
-with m_row1[0]:
-  st.metric("최신 종가", f"{latest_close:,.0f} 원")
-with m_row1[1]:
+with m_cols[0]:
+  st.metric("종가", f"{latest_close:,.0f}원")
+with m_cols[1]:
   st.metric(
-      "시가총액",
-      f"{latest_marcap_val / 100_000_000:,.1f} 억"
+      "시총",
+      f"{latest_marcap_val / 100_000_000:,.0f}억"
       if latest_marcap_val > 0
       else "N/A",
   )
-
-with m_row2[0]:
-  st.metric("평균 POR", f"{mean_val:.2f}")
-with m_row2[1]:
-  st.metric("표준편차", f"{std_val:.2f}")
-with m_row2[2]:
-  st.metric("+2σ 상단", f"{(mean_val + std_val*2):.2f}")
+with m_cols[2]:
+  st.metric("평균POR", f"{mean_val:.1f}")
+with m_cols[3]:
+  st.metric("+2σ 상단", f"{(mean_val + std_val*2):.1f}")
 
 # 📱 차트 시각화
 fig = go.Figure()
@@ -545,7 +538,7 @@ fig.add_trace(
         y=stock_df["수정_POR"],
         mode="lines",
         name="POR",
-        line=dict(color="#FFFFFF", width=1.8),
+        line=dict(color="#FFFFFF", width=1.6),
     )
 )
 fig.add_trace(
@@ -554,7 +547,7 @@ fig.add_trace(
         y=stock_df["+2σ"],
         mode="lines",
         name="+2σ",
-        line=dict(color="#FF5555", width=1.2, dash="dash"),
+        line=dict(color="#FF5555", width=1.1, dash="dash"),
     )
 )
 fig.add_trace(
@@ -563,7 +556,7 @@ fig.add_trace(
         y=stock_df["+1σ"],
         mode="lines",
         name="+1σ",
-        line=dict(color="#FFB86C", width=1.2, dash="dot"),
+        line=dict(color="#FFB86C", width=1.1, dash="dot"),
     )
 )
 fig.add_trace(
@@ -572,7 +565,7 @@ fig.add_trace(
         y=stock_df["Mean"],
         mode="lines",
         name="평균",
-        line=dict(color="#50FA7B", width=1.5, dash="solid"),
+        line=dict(color="#50FA7B", width=1.4, dash="solid"),
     )
 )
 fig.add_trace(
@@ -581,7 +574,7 @@ fig.add_trace(
         y=stock_df["-1σ"],
         mode="lines",
         name="-1σ",
-        line=dict(color="#8BE9FD", width=1.2, dash="dot"),
+        line=dict(color="#8BE9FD", width=1.1, dash="dot"),
     )
 )
 fig.add_trace(
@@ -590,44 +583,38 @@ fig.add_trace(
         y=stock_df["-2σ"],
         mode="lines",
         name="-2σ",
-        line=dict(color="#BD93F9", width=1.2, dash="dash"),
+        line=dict(color="#BD93F9", width=1.1, dash="dash"),
     )
 )
 
-# 모바일 차트 레이아웃 조정
 fig.update_layout(
-    title=dict(
-        text=f"<b>{selected_stock} POR 밴드</b>",
-        font=dict(color="#FFFFFF", size=14),
-    ),
     paper_bgcolor="#1E1E1E",
     plot_bgcolor="#141414",
-    font=dict(color="#FFFFFF", size=10),
-    margin=dict(l=10, r=10, t=45, b=20),  # 마진 최소화
+    font=dict(color="#FFFFFF", size=9),
+    margin=dict(l=5, r=5, t=25, b=15),
     xaxis=dict(
-        showgrid=True, gridcolor="#333333", color="#FFFFFF", tickfont=dict(size=9)
+        showgrid=True, gridcolor="#2A2A2A", color="#FFFFFF", tickfont=dict(size=8)
     ),
     yaxis=dict(
-        showgrid=True, gridcolor="#333333", color="#FFFFFF", tickfont=dict(size=9)
+        showgrid=True, gridcolor="#2A2A2A", color="#FFFFFF", tickfont=dict(size=8)
     ),
     hovermode="x unified",
-    height=420,  # 모바일 세로 길이 적정 높이
+    height=380,
     legend=dict(
         orientation="h",
         yanchor="bottom",
         y=1.01,
         xanchor="center",
         x=0.5,
-        font=dict(color="#FFFFFF", size=10),
+        font=dict(color="#FFFFFF", size=9),
     ),
 )
 
-# 모바일 차트 터치/스크롤 간섭 방지 config 설정
 st.plotly_chart(
     fig,
     use_container_width=True,
     config={
-        "scrollZoom": False,  # 페이지 스크롤 방해 금지
-        "displayModeBar": False,  # 불필요한 아이콘 툴바 숨김
+        "scrollZoom": False,
+        "displayModeBar": False,
     },
 )
