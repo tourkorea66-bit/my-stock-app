@@ -23,25 +23,27 @@ st.set_page_config(
 # ==========================================
 # 🔑 JSONBin & DART API 설정
 JSONBIN_BIN_ID = "6ab0e792ac6210605ae50647".strip()
-JSONBIN_API_KEY = "$2a$10$rD4B95ncdqx06uhoNoZx.e8D6bg7c7EKwxOHKb7siGAbfUW59G4Q6".strip()
+JSONBIN_API_KEY = (
+    "$2a$10$rD4B95ncdqx06uhoNoZx.e8D6bg7c7EKwxOHKb7siGAbfUW59G4Q6".strip()
+)
 
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
 # 기본 종목 목록
 DEFAULT_STOCKS = {
-    '반도체': {
-        'SK하이닉스': {'code': '000660', 'op_2026': 0.0},
-        '티엘비': {'code': '356860', 'op_2026': 0.0},
-        '엠케이전자': {'code': '033160', 'op_2026': 0.0},
-        'ISC': {'code': '095340', 'op_2026': 0.0},
-        '엘티씨': {'code': '170920', 'op_2026': 0.0},
-        '하나마이크론': {'code': '067310', 'op_2026': 0.0},
-        '하나머티리얼즈': {'code': '166090', 'op_2026': 0.0},
-        '코미코': {'code': '183300', 'op_2026': 0.0},
-        '에프에스티': {'code': '036810', 'op_2026': 0.0},
+    "반도체": {
+        "SK하이닉스": {"code": "000660", "op_2026": 0.0},
+        "티엘비": {"code": "356860", "op_2026": 0.0},
+        "엠케이전자": {"code": "033160", "op_2026": 0.0},
+        "ISC": {"code": "095340", "op_2026": 0.0},
+        "엘티씨": {"code": "170920", "op_2026": 0.0},
+        "하나마이크론": {"code": "067310", "op_2026": 0.0},
+        "하나머티리얼즈": {"code": "166090", "op_2026": 0.0},
+        "코미코": {"code": "183300", "op_2026": 0.0},
+        "에프에스티": {"code": "036810", "op_2026": 0.0},
     },
-    '관심종목': {},
+    "관심종목": {},
 }
 
 
@@ -264,16 +266,16 @@ st.markdown(
     }
 
     /* 입력 폼 선명도 최적화 */
-    div[data-testid="stNumberInput"] {
+    div[data-testid="stNumberInput"], div[data-testid="stTextInput"] {
         margin-bottom: 0px !important;
     }
-    div[data-testid="stNumberInput"] label p {
+    div[data-testid="stNumberInput"] label p, div[data-testid="stTextInput"] label p {
         font-size: 0.68rem !important;
         color: #DCDFE6 !important;
         font-weight: 600 !important;
         margin-bottom: 2px !important;
     }
-    div[data-testid="stNumberInput"] input {
+    div[data-testid="stNumberInput"] input, div[data-testid="stTextInput"] input {
         height: 1.9rem !important;
         font-size: 0.80rem !important;
         color: #FFFFFF !important;
@@ -335,8 +337,35 @@ with top_col2:
         selected_stock = None
         st.info("종목 없음")
 
-# 신규 종목 추가 Expander (메인 화면 상단)
-with st.expander("➕ KRX 신규 종목 검색 및 추가 / 삭제"):
+# 신규 카테고리 / 종목 관리 Expander
+with st.expander("⚙️ 카테고리 및 KRX 종목 추가 / 삭제"):
+    # --- 1. 신규 카테고리 추가 영역 ---
+    st.markdown("<b>📁 신규 카테고리 생성</b>", unsafe_allow_html=True)
+    cat_add_col1, cat_add_col2 = st.columns([3.5, 1])
+    with cat_add_col1:
+        new_cat_name = st.text_input(
+            "새 카테고리 이름",
+            placeholder="예: 2차전지, 제약바이오",
+            label_visibility="collapsed",
+        )
+    with cat_add_col2:
+        if st.button("카테고리 추가", use_container_width=True):
+            clean_cat_name = new_cat_name.strip()
+            if clean_cat_name:
+                if clean_cat_name not in st.session_state.stock_categories:
+                    st.session_state.stock_categories[clean_cat_name] = {}
+                    save_stocks_data(st.session_state.stock_categories)
+                    st.toast(f"카테고리 '{clean_cat_name}' 추가 완료", icon="📁")
+                    st.rerun()
+                else:
+                    st.warning("이미 존재하는 카테고리입니다.")
+            else:
+                st.warning("카테고리 이름을 입력해주세요.")
+
+    st.markdown("---")
+
+    # --- 2. KRX 종목 추가 및 삭제 영역 ---
+    st.markdown("<b>📈 종목 추가 및 삭제</b>", unsafe_allow_html=True)
     add_col1, add_col2, add_col3 = st.columns([2, 1.5, 1])
 
     if not krx_df.empty:
@@ -351,7 +380,6 @@ with st.expander("➕ KRX 신규 종목 검색 및 추가 / 삭제"):
             )
 
         with add_col2:
-            # 기본 선택값으로 현재 메인에서 지정 중인 카테고리를 설정
             default_cat_idx = (
                 cat_list.index(selected_category) if selected_category in cat_list else 0
             )
@@ -361,7 +389,7 @@ with st.expander("➕ KRX 신규 종목 검색 및 추가 / 삭제"):
 
         with add_col3:
             st.markdown("<div style='height:18px;'></div>", unsafe_allow_html=True)
-            if st.button("추가", use_container_width=True):
+            if st.button("종목 추가", use_container_width=True):
                 if selected_search != "선택...":
                     s_name = selected_search.split(" (")[0]
                     s_code = selected_search.split(" (")[1].replace(")", "")
@@ -379,7 +407,7 @@ with st.expander("➕ KRX 신규 종목 검색 및 추가 / 삭제"):
 
     if selected_stock:
         if st.button(
-            f"🗑️ 현재 종목({selected_stock}) 삭제", use_container_width=True
+            f"🗑️ 현재 선택 종목({selected_stock}) 삭제", use_container_width=True
         ):
             del st.session_state.stock_categories[selected_category][selected_stock]
             save_stocks_data(st.session_state.stock_categories)
@@ -388,7 +416,7 @@ with st.expander("➕ KRX 신규 종목 검색 및 추가 / 삭제"):
 
 if not selected_stock or selected_stock not in available_stocks:
     st.warning(
-        "선택된 종목이 없습니다. 상단 메인 메뉴에서 종목을 선택하거나 추가해주세요."
+        "선택된 종목이 없습니다. 상단 메뉴나 카테고리 관리에서 종목을 선택 또는 추가해주세요."
     )
     st.stop()
 
