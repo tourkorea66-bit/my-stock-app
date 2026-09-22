@@ -22,7 +22,7 @@ st.set_page_config(
 
 # ==========================================
 # 🔑 JSONBin & DART API 설정
-JSONBIN_BIN_ID = "4BFguH7NDFgCn3svCXBV8v".strip()
+JSONBIN_BIN_ID = "6ab0e792ac6210605ae50647".strip()
 JSONBIN_API_KEY = "$2a$10$rD4B95ncdqx06uhoNoZx.e8D6bg7c7EKwxOHKb7siGAbfUW59G4Q6".strip()
 
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
