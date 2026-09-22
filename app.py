@@ -3,7 +3,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import io
 import json
-import os
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -18,9 +17,7 @@ import streamlit as st
 st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
-# 🔑 설정 및 데이터 파일 경로
-LOCAL_DATA_FILE = "stocks_data.json"
-
+# 🔑 JSONBin & DART API 설정
 JSONBIN_BIN_ID = "여기에_BIN_ID_입력".strip()
 JSONBIN_API_KEY = "여기에_MASTER_KEY_입력".strip()
 JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
@@ -28,7 +25,7 @@ JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
-# 기본 종목 목록 (초기 구동 시 데이터가 없을 때 사용)
+# 기본 종목 목록 (JSONBin 최초 접속 실패 시 fallback)
 DEFAULT_STOCKS = {
     '반도체': {
         'SK하이닉스': {'code': '000660', 'op_2026': 0.0},
@@ -45,36 +42,42 @@ DEFAULT_STOCKS = {
 }
 
 
-# --- 🔄 영구 저장 / 로드 함수 (로컬 JSON 1순위, JSONBin 2순위) ---
+# --- 🔄 JSONBin 전용 로드 / 저장 함수 ---
 def load_stocks_data():
-  # 1. 로컬 파일에서 읽기 시도
-  if os.path.exists(LOCAL_DATA_FILE):
-    try:
-      with open(LOCAL_DATA_FILE, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-        if isinstance(data, dict) and data:
-          return data
-    except Exception:
-      pass
+  if not JSONBIN_BIN_ID or "여기에" in JSONBIN_BIN_ID:
+    st.warning(
+        "⚠️ JSONBin BIN_ID가 설정되지 않았습니다. 기본 설정을 표시합니다."
+    )
+    return copy.deepcopy(DEFAULT_STOCKS)
 
-  # 2. 로컬 파일 실패/없을 시 JSONBin 읽기 시도
-  if JSONBIN_BIN_ID and "여기에" not in JSONBIN_BIN_ID:
-    headers = {"X-Master-Key": JSONBIN_API_KEY}
-    try:
-      res = requests.get(f"{JSONBIN_URL}/latest", headers=headers, timeout=5)
-      if res.status_code == 200:
-        result = res.json()
-        saved_data = result.get('record', {})
-        if isinstance(saved_data, dict) and saved_data:
-          # 로컬 파일로 백업 저장
-          try:
-            with open(LOCAL_DATA_FILE, 'w', encoding='utf-8') as f:
-              json.dump(saved_data, f, ensure_ascii=False, indent=4)
-          except Exception:
-            pass
-          return saved_data
-    except Exception:
-      pass
+  headers = {
+      "X-Master-Key": JSONBIN_API_KEY,
+      "X-Bin-Meta": "false",  # metadata 제외하고 raw record만 가져옴
+  }
+
+  try:
+    # ?cache=false 구문으로 서버 캐시를 방지하여 최신 데이터를 즉시 조회
+    res = requests.get(
+        f"{JSONBIN_URL}/latest?cache=false", headers=headers, timeout=5
+    )
+    if res.status_code == 200:
+      saved_data = res.json()
+
+      # JSONBin 응답 구조에 따라 record 키 감싸기 처리
+      if isinstance(saved_data, dict) and "record" in saved_data:
+        saved_data = saved_data["record"]
+
+      if isinstance(saved_data, dict) and saved_data:
+        return saved_data
+    else:
+      st.error(
+          f"❌ JSONBin 로드 실패 (응답 코드: {res.status_code}) - 기본값을"
+          " 표시합니다."
+      )
+  except Exception as e:
+    st.error(
+        f"⚠️ JSONBin 통신 오류 (기본값을 표시합니다): {e}"
+    )
 
   return copy.deepcopy(DEFAULT_STOCKS)
 
@@ -83,30 +86,28 @@ def save_stocks_data(data):
   if not data:
     data = copy.deepcopy(DEFAULT_STOCKS)
 
-  # 1. 로컬 파일 저장
-  saved_local = False
+  if not JSONBIN_BIN_ID or "여기에" in JSONBIN_BIN_ID:
+    st.error("❌ JSONBin BIN_ID가 설정되지 않아 저장할 수 없습니다.")
+    return False
+
+  headers = {
+      "Content-Type": "application/json",
+      "X-Master-Key": JSONBIN_API_KEY,
+  }
+
   try:
-    with open(LOCAL_DATA_FILE, 'w', encoding='utf-8') as f:
-      json.dump(data, f, ensure_ascii=False, indent=4)
-    saved_local = True
+    res = requests.put(JSONBIN_URL, json=data, headers=headers, timeout=5)
+    if res.status_code == 200:
+      return True
+    else:
+      st.error(f"❌ JSONBin 저장 실패 (응답 코드: {res.status_code})")
+      return False
   except Exception as e:
-    st.error(f"❌ 로컬 데이터 저장 실패: {e}")
-
-  # 2. JSONBin 저장 (설정되어 있을 경우)
-  if JSONBIN_BIN_ID and "여기에" not in JSONBIN_BIN_ID:
-    headers = {
-        "Content-Type": "application/json",
-        "X-Master-Key": JSONBIN_API_KEY,
-    }
-    try:
-      requests.put(JSONBIN_URL, json=data, headers=headers, timeout=5)
-    except Exception:
-      pass
-
-  return saved_local
+    st.error(f"❌ JSONBin 저장 중 예외 발생: {e}")
+    return False
 
 
-# 앱 시작 시 자동 불러오기
+# 앱 시작 시 세션 상태에 JSONBin 최신 데이터 로드
 if 'stock_categories' not in st.session_state:
   st.session_state.stock_categories = load_stocks_data()
 
@@ -123,7 +124,7 @@ def get_krx_stock_list():
 krx_df = get_krx_stock_list()
 
 
-# --- DART 고유번호 매핑 로컬 파일 캐싱 ---
+# --- DART 고유번호 매핑 캐싱 ---
 @st.cache_data(ttl=86400 * 30)
 def get_dart_corp_code_map(api_key):
   corp_map = {}
@@ -274,33 +275,25 @@ if st.sidebar.button(f"❌ {selected_stock} 삭제"):
 
 # ==================== 메인 화면 ====================
 
-# --- 🎨 CSS: 제목, 서브헤더 및 UI 컴포넌트 전체 크기 축소 ---
 st.markdown(
     """
     <style>
-    /* 0. 메인 컨테이너 상단 여백 축소 */
     .block-container {
         padding-top: 2rem !important;
         padding-bottom: 2rem !important;
     }
-    
-    /* 1. 메인 제목(st.title) 축소 */
     h1 {
         font-size: 1.35rem !important;
         font-weight: 700 !important;
         padding-bottom: 0.5rem !important;
         margin-bottom: 0.5rem !important;
     }
-    
-    /* 2. 서브 제목(st.subheader) 축소 */
     h3 {
         font-size: 1.05rem !important;
         font-weight: 600 !important;
         margin-top: 0.5rem !important;
         margin-bottom: 0.5rem !important;
     }
-
-    /* 3. Metric 라벨 및 값 축소 */
     [data-testid="stMetricLabel"] {
         font-size: 0.75rem !important;
     }
@@ -310,8 +303,6 @@ st.markdown(
     div[data-testid="stMetric"] {
         padding: 2px 4px !important;
     }
-
-    /* 4. Number Input 레이블 및 입력창 축소 */
     div[data-testid="stNumberInput"] label p {
         font-size: 0.75rem !important;
     }
@@ -329,20 +320,20 @@ st.title(
     " 시뮬레이션"
 )
 
-# DART API를 통한 과거 5년 실적 실시간 조회
+# DART API를 통한 과거 실적 조회
 with st.spinner("DART에서 과거 영업이익 데이터를 불러오는 중..."):
   dart_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
 
 st.subheader("📊 연도별 영업이익 현황 및 추정치 (단위: 억원)")
 
 
-# 2026년 추정치 수정 시 자동 저장 콜백 함수
+# 2026년 추정치 수정 시 즉시 JSONBin으로 저장
 def update_2026_op(cat, stock):
   widget_key = f"input_{stock}_2026"
   new_val = st.session_state[widget_key]
   st.session_state.stock_categories[cat][stock]['op_2026'] = new_val
-  save_stocks_data(st.session_state.stock_categories)
-  st.toast(f"2026년 추정치 ({new_val:,.1f} 억원) 저장 완료", icon="💾")
+  if save_stocks_data(st.session_state.stock_categories):
+    st.toast(f"2026년 추정치 ({new_val:,.1f} 억원) JSONBin 저장 완료", icon="💾")
 
 
 final_ops = {}
@@ -350,7 +341,7 @@ p_cols = st.columns(6)
 has_negative_op = False
 past_years = ['2021', '2022', '2023', '2024', '2025']
 
-# DART 수집 실적 표시 (2021 ~ 2025)
+# DART 실적 표시
 for idx, yr in enumerate(past_years):
   val_dart = float(dart_ops.get(yr, 0.0))
   final_ops[yr] = val_dart * 100_000_000.0
@@ -371,7 +362,7 @@ for idx, yr in enumerate(past_years):
           unsafe_allow_html=True,
       )
 
-# 2026년 추정치 입력란 (엔터 시 자동 저장)
+# 2026년 추정치 입력란
 with p_cols[5]:
   current_2026_val = float(stock_info.get('op_2026', 0.0))
   input_2026 = st.number_input(
