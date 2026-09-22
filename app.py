@@ -658,96 +658,109 @@ st.plotly_chart(
     },
 )
 
-# ==================== 🔍 전체 종목 -2σ 스크리닝 모듈 ====================
-def screen_minus_2sigma_stocks(stock_categories, dart_api_key):
-    """등록된 모든 종목 중 현재 주가가 -2σ 밴드 이하인 종목 스크리닝"""
-    results = []
-
-    for cat_name, stocks in stock_categories.items():
-        for s_name, s_info in stocks.items():
-            code = s_info.get("code")
-            if not code:
-                continue
-
-            try:
-                # 1. 주가 데이터 및 DART 영업이익 수집
-                df = get_stock_data_api(code, start_date, end_date)
-                dart_ops = fetch_operating_profit_dart(code, dart_api_key)
-
-                if df.empty:
-                    continue
-
-                df["날짜"] = pd.to_datetime(df["Date"])
-                df["종가"] = pd.to_numeric(df["Close"], errors="coerce")
-                df["연도"] = df["날짜"].dt.year.astype(str)
-
-                # 시가총액 계산
-                if "Marcap" in df.columns and df["Marcap"].notnull().sum() > 0:
-                    df["시가총액"] = pd.to_numeric(
-                        df["Marcap"], errors="coerce"
-                    )
-                else:
-                    df["시가총액"] = df["종가"] * 0  # 대체 수치 적용
-
-                # 영업이익 매핑
-                ops_dict = {
-                    yr: float(dart_ops.get(yr, 0.0)) * 100_000_000.0
-                    for yr in ["2021", "2022", "2023", "2024", "2025"]
-                }
-                ops_dict["2026"] = (
-                    float(s_info.get("op_2026", 0.0)) * 100_000_000.0
-                )
-
-                df["수정_영업이익"] = df["연도"].map(ops_dict)
-                df["수정_POR"] = np.where(
-                    (df["수정_영업이익"] > 0) & (df["시가총액"] > 0),
-                    df["시가총액"] / df["수정_영업이익"],
-                    np.nan,
-                )
-
-                valid_por = df["수정_POR"].dropna()
-                if len(valid_por) < 10:
-                    continue
-
-                mean_val = valid_por.mean()
-                std_val = valid_por.std()
-                target_minus_2sigma = mean_val - (2 * std_val)
-
-                latest_por = valid_por.iloc[-1]
-                latest_close = df["종가"].iloc[-1]
-
-                # -2시그마 이하 조건 충족 여부 확인
-                if latest_por <= target_minus_2sigma:
-                    results.append({
-                        "카테고리": cat_name,
-                        "종목명": s_name,
-                        "종목코드": code,
-                        "현재 종가": f"{latest_close:,.0f}원",
-                        "현재 POR": f"{latest_por:.2f}",
-                        "평균 POR": f"{mean_val:.2f}",
-                        "-2σ 밴드": f"{target_minus_2sigma:.2f}",
-                        "괴리율": f"{((latest_por - target_minus_2sigma) / target_minus_2sigma) * 100:.1f}%",
-                    })
-            except Exception:
-                continue
-
-    return pd.DataFrame(results)
-
-
-# Streamlit UI 상에 필터링 버튼 및 결과 표시
+# ==================== 🎯 -1σ / -2σ 하단 이탈 종목 각각 분리 출력 ====================
 st.markdown("---")
-st.markdown("### 🎯 -2σ 하단 이탈 종목 전체 탐색")
+st.markdown("### 🎯 등록 종목 시그마(-1σ / -2σ) 이탈 스크리닝")
 
-if st.button("🔍 등록 종목 전체 -2σ 스크리닝 실행"):
-    with st.spinner("전체 종목 POR 밴드 -2σ 하향 이탈 여부 계산 중..."):
-        screened_df = screen_minus_2sigma_stocks(
-            st.session_state.stock_categories, DART_API_KEY
-        )
+if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_width=True):
+    results_minus_1s = []
+    results_minus_2s = []
 
-        if not screened_df.empty:
-            st.success(
-                f"총 {len(screened_df)}개 종목이 -2σ 하단 밴드 이하에 위치해 있습니다!"
-            )
-            st.dataframe(screened_df, use_container_width=True)
+    with st.spinner("등록된 전체 종목의 -1σ 및 -2σ 이탈 여부를 분석 중입니다..."):
+        for cat_name, stocks in st.session_state.stock_categories.items():
+            for s_name, s_info in stocks.items():
+                code = s_info.get("code")
+                if not code:
+                    continue
+                try:
+                    df = get_stock_data_api(code, start_date, end_date)
+                    d_ops = fetch_operating_profit_dart(code, DART_API_KEY)
+
+                    if df.empty:
+                        continue
+
+                    df["날짜"] = pd.to_datetime(df["Date"])
+                    df["종가"] = pd.to_numeric(df["Close"], errors="coerce")
+                    df["연도"] = df["날짜"].dt.year.astype(str)
+
+                    if "Marcap" in df.columns and df["Marcap"].notnull().sum() > 0:
+                        df["시가총액"] = pd.to_numeric(df["Marcap"], errors="coerce")
+                    else:
+                        df["시가총액"] = df["종가"] * 0
+
+                    ops_dict = {
+                        yr: float(d_ops.get(yr, 0.0)) * 100_000_000.0
+                        for yr in ["2021", "2022", "2023", "2024", "2025"]
+                    }
+                    ops_dict["2026"] = (
+                        float(s_info.get("op_2026", 0.0)) * 100_000_000.0
+                    )
+
+                    df["수정_영업이익"] = df["연도"].map(ops_dict)
+                    df["수정_POR"] = np.where(
+                        (df["수정_영업이익"] > 0) & (df["시가총액"] > 0),
+                        df["시가총액"] / df["수정_영업이익"],
+                        np.nan,
+                    )
+
+                    v_por = df["수정_POR"].dropna()
+                    if len(v_por) < 10:
+                        continue
+
+                    m_val = v_por.mean()
+                    s_val = v_por.std()
+                    
+                    target_minus_1s = m_val - s_val
+                    target_minus_2s = m_val - (s_val * 2)
+
+                    cur_por = v_por.iloc[-1]
+                    cur_close = df["종가"].iloc[-1]
+
+                    # 1. -1시그마 이하 스크리닝
+                    if cur_por <= target_minus_1s:
+                        diff_1s = ((cur_por - target_minus_1s) / target_minus_1s) * 100
+                        results_minus_1s.append({
+                            "카테고리": cat_name,
+                            "종목명": s_name,
+                            "종목코드": code,
+                            "현재 종가": f"{cur_close:,.0f}원",
+                            "현재 POR": f"{cur_por:.2f}",
+                            "평균 POR": f"{m_val:.2f}",
+                            "-1σ 밴드": f"{target_minus_1s:.2f}",
+                            "괴리율": f"{diff_1s:.1f}%",
+                        })
+
+                    # 2. -2시그마 이하 스크리닝
+                    if cur_por <= target_minus_2s:
+                        diff_2s = ((cur_por - target_minus_2s) / target_minus_2s) * 100
+                        results_minus_2s.append({
+                            "카테고리": cat_name,
+                            "종목명": s_name,
+                            "종목코드": code,
+                            "현재 종가": f"{cur_close:,.0f}원",
+                            "현재 POR": f"{cur_por:.2f}",
+                            "평균 POR": f"{m_val:.2f}",
+                            "-2σ 밴드": f"{target_minus_2s:.2f}",
+                            "괴리율": f"{diff_2s:.1f}%",
+                        })
+                except Exception:
+                    continue
+
+    # 결과를 탭으로 분리하여 각각 출력
+    tab1, tab2 = st.tabs(["📌 -1σ 이하 (저평가 구간)", "🚨 -2σ 이하 (극단적 저평가/하향)"])
+
+    with tab1:
+        if results_minus_1s:
+            df_1s = pd.DataFrame(results_minus_1s)
+            st.success(f"총 {len(df_1s)}개 종목이 -1σ 하단 밴드 이하에 위치해 있습니다.")
+            st.dataframe(df_1s, use_container_width=True)
         else:
-            st.info("현재 -2σ 이하로 하향 이탈한 종목이 없습니다.")
+            st.info("현재 -1σ 이하로 이탈한 종목이 없습니다.")
+
+    with tab2:
+        if results_minus_2s:
+            df_2s = pd.DataFrame(results_minus_2s)
+            st.warning(f"총 {len(df_2s)}개 종목이 -2σ 하단 밴드 이하에 위치해 있습니다.")
+            st.dataframe(df_2s, use_container_width=True)
+        else:
+            st.info("현재 -2σ 이하로 이탈한 종목이 없습니다.")
