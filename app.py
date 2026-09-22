@@ -18,15 +18,17 @@ import streamlit as st
 st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
-# 🔑 JSONBin.io 및 Open DART 설정
+# 🔑 설정 및 데이터 파일 경로
+LOCAL_DATA_FILE = "stocks_data.json"
+
 JSONBIN_BIN_ID = "여기에_BIN_ID_입력".strip()
 JSONBIN_API_KEY = "여기에_MASTER_KEY_입력".strip()
-
 JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
-# 기본 종목 목록 (코드 및 2026년 기본 추정치만 보유)
+# 기본 종목 목록 (초기 구동 시 데이터가 없을 때 사용)
 DEFAULT_STOCKS = {
     '반도체': {
         'SK하이닉스': {'code': '000660', 'op_2026': 0.0},
@@ -43,58 +45,70 @@ DEFAULT_STOCKS = {
 }
 
 
-# --- 🔄 JSONBin 자동 저장 / 로드 함수 ---
-def load_stocks_data_from_kvdb():
-  base_data = copy.deepcopy(DEFAULT_STOCKS)
-  headers = {"X-Master-Key": JSONBIN_API_KEY}
+# --- 🔄 영구 저장 / 로드 함수 (로컬 JSON 1순위, JSONBin 2순위) ---
+def load_stocks_data():
+  # 1. 로컬 파일에서 읽기 시도
+  if os.path.exists(LOCAL_DATA_FILE):
+    try:
+      with open(LOCAL_DATA_FILE, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+        if isinstance(data, dict) and data:
+          return data
+    except Exception:
+      pass
+
+  # 2. 로컬 파일 실패/없을 시 JSONBin 읽기 시도
+  if JSONBIN_BIN_ID and "여기에" not in JSONBIN_BIN_ID:
+    headers = {"X-Master-Key": JSONBIN_API_KEY}
+    try:
+      res = requests.get(f"{JSONBIN_URL}/latest", headers=headers, timeout=5)
+      if res.status_code == 200:
+        result = res.json()
+        saved_data = result.get('record', {})
+        if isinstance(saved_data, dict) and saved_data:
+          # 로컬 파일로 백업 저장
+          try:
+            with open(LOCAL_DATA_FILE, 'w', encoding='utf-8') as f:
+              json.dump(saved_data, f, ensure_ascii=False, indent=4)
+          except Exception:
+            pass
+          return saved_data
+    except Exception:
+      pass
+
+  return copy.deepcopy(DEFAULT_STOCKS)
+
+
+def save_stocks_data(data):
+  if not data:
+    data = copy.deepcopy(DEFAULT_STOCKS)
+
+  # 1. 로컬 파일 저장
+  saved_local = False
   try:
-    res = requests.get(f"{JSONBIN_URL}/latest", headers=headers, timeout=5)
-    if res.status_code == 200:
-      result = res.json()
-      saved_data = result.get('record', {})
+    with open(LOCAL_DATA_FILE, 'w', encoding='utf-8') as f:
+      json.dump(data, f, ensure_ascii=False, indent=4)
+    saved_local = True
+  except Exception as e:
+    st.error(f"❌ 로컬 데이터 저장 실패: {e}")
 
-      if isinstance(saved_data, dict) and saved_data:
-        for cat, stocks in saved_data.items():
-          if cat not in base_data:
-            base_data[cat] = {}
-          if isinstance(stocks, dict):
-            for name, val in stocks.items():
-              if isinstance(val, dict):
-                code = val.get('code', '')
-                op_2026 = val.get(
-                    'op_2026', val.get('ops', {}).get('2026', 0.0)
-                )
-              else:
-                code = str(val)
-                op_2026 = 0.0
-              base_data[cat][name] = {
-                  'code': code,
-                  'op_2026': float(op_2026),
-              }
-      return base_data
-  except Exception:
-    pass
-  return base_data
-
-
-def save_stocks_data_to_kvdb(data):
-  try:
-    if not data:
-      data = copy.deepcopy(DEFAULT_STOCKS)
-
+  # 2. JSONBin 저장 (설정되어 있을 경우)
+  if JSONBIN_BIN_ID and "여기에" not in JSONBIN_BIN_ID:
     headers = {
         "Content-Type": "application/json",
         "X-Master-Key": JSONBIN_API_KEY,
     }
-    res = requests.put(JSONBIN_URL, json=data, headers=headers, timeout=5)
-    return res.status_code == 200
-  except Exception:
-    return False
+    try:
+      requests.put(JSONBIN_URL, json=data, headers=headers, timeout=5)
+    except Exception:
+      pass
+
+  return saved_local
 
 
 # 앱 시작 시 자동 불러오기
 if 'stock_categories' not in st.session_state:
-  st.session_state.stock_categories = load_stocks_data_from_kvdb()
+  st.session_state.stock_categories = load_stocks_data()
 
 
 # KRX 상장 종목 데이터 (캐싱)
@@ -197,7 +211,7 @@ with st.sidebar.expander("📁 카테고리 추가"):
   if st.button("카테고리 생성"):
     if new_cat_name and new_cat_name not in st.session_state.stock_categories:
       st.session_state.stock_categories[new_cat_name] = {}
-      save_stocks_data_to_kvdb(st.session_state.stock_categories)
+      save_stocks_data(st.session_state.stock_categories)
       st.toast(f"'{new_cat_name}' 카테고리가 생성되었습니다.", icon="✅")
       st.rerun()
 
@@ -227,7 +241,7 @@ with st.sidebar.expander("➕ 신규 종목 추가"):
               'code': code,
               'op_2026': 0.0,
           }
-          save_stocks_data_to_kvdb(st.session_state.stock_categories)
+          save_stocks_data(st.session_state.stock_categories)
           st.toast(f"'{name}' 종목이 추가되었습니다.", icon="✅")
           st.rerun()
 
@@ -254,7 +268,7 @@ stock_code = stock_info['code']
 
 if st.sidebar.button(f"❌ {selected_stock} 삭제"):
   del st.session_state.stock_categories[selected_category][selected_stock]
-  save_stocks_data_to_kvdb(st.session_state.stock_categories)
+  save_stocks_data(st.session_state.stock_categories)
   st.toast(f"{selected_stock} 삭제 완료", icon="🗑️")
   st.rerun()
 
@@ -327,8 +341,8 @@ def update_2026_op(cat, stock):
   widget_key = f"input_{stock}_2026"
   new_val = st.session_state[widget_key]
   st.session_state.stock_categories[cat][stock]['op_2026'] = new_val
-  save_stocks_data_to_kvdb(st.session_state.stock_categories)
-  st.toast(f"2026년 추정치 ({new_val:,.1f} 억원) 자동 저장 완료", icon="💾")
+  save_stocks_data(st.session_state.stock_categories)
+  st.toast(f"2026년 추정치 ({new_val:,.1f} 억원) 저장 완료", icon="💾")
 
 
 final_ops = {}
@@ -541,7 +555,7 @@ fig.update_layout(
             f"<b>{selected_stock} {start_date.year}년 1월 ~ 현재 POR 밴드"
             " 차트</b>"
         ),
-        font=dict(color='#FFFFFF', size=13),  # 차트 제목 글자 크기 축소 (16 -> 13)
+        font=dict(color='#FFFFFF', size=13),
     ),
     paper_bgcolor='#1E1E1E',
     plot_bgcolor='#141414',
