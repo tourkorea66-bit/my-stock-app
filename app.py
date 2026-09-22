@@ -225,11 +225,11 @@ def fetch_operating_profit_dart(code, api_key):
   return ops
 
 
-# ==================== 📱 모바일 초밀집 스타일링 (CSS) ====================
+# ==================== 📱 초밀집 & 고대비 스타일링 (CSS) ====================
 st.markdown(
     """
     <style>
-    /* 여백 최소화 */
+    /* 기본 여백 축소 */
     .block-container {
         padding-top: 0.8rem !important;
         padding-bottom: 1.5rem !important;
@@ -237,44 +237,50 @@ st.markdown(
         padding-right: 0.5rem !important;
     }
 
-    h1, h2, h3 {
-        margin: 0.2rem 0 !important;
-        padding: 0 !important;
-    }
-
-    /* 촘촘한 Metric 카드 디자인 */
+    /* Metric 카드 스타일 및 선명한 글자색 선언 */
     div[data-testid="stMetric"] {
-        background-color: #242424 !important;
-        padding: 4px 6px !important;
+        background-color: #1E222A !important;
+        padding: 6px 8px !important;
         border-radius: 6px !important;
-        border: 1px solid #333333 !important;
-        margin-bottom: 2px !important;
-        min-height: 48px !important;
+        border: 1px solid #3A3F4D !important;
+        margin-bottom: 4px !important;
+        min-height: 52px !important;
     }
+    
+    /* Metric 라벨 (연도 및 항목 이름) - 시인성 확보 */
     div[data-testid="stMetricLabel"] p {
-        font-size: 0.68rem !important;
-        color: #AAAAAA !important;
+        font-size: 0.72rem !important;
+        color: #DCDFE6 !important;
+        font-weight: 600 !important;
         line-height: 1.1 !important;
         margin: 0 !important;
     }
+    
+    /* Metric 값 (숫자) - 선명한 흰색 및 볼드 */
     div[data-testid="stMetricValue"] div {
-        font-size: 0.88rem !important;
-        font-weight: bold !important;
+        font-size: 0.95rem !important;
+        color: #FFFFFF !important;
+        font-weight: 700 !important;
         line-height: 1.2 !important;
     }
 
-    /* 입력 폼 컴팩트화 */
+    /* 입력 폼 선명도 최적화 */
     div[data-testid="stNumberInput"] {
         margin-bottom: 0px !important;
     }
     div[data-testid="stNumberInput"] label p {
-        font-size: 0.68rem !important;
+        font-size: 0.72rem !important;
+        color: #DCDFE6 !important;
+        font-weight: 600 !important;
         margin-bottom: 2px !important;
     }
     div[data-testid="stNumberInput"] input {
-        height: 1.8rem !important;
-        font-size: 0.8rem !important;
-        padding: 2px 4px !important;
+        height: 2.0rem !important;
+        font-size: 0.85rem !important;
+        color: #FFFFFF !important;
+        background-color: #1E222A !important;
+        border: 1px solid #3A3F4D !important;
+        padding: 2px 6px !important;
     }
 
     /* 선택박스 컴팩트화 */
@@ -282,7 +288,8 @@ st.markdown(
         margin-bottom: 4px !important;
     }
     div[data-testid="stSelectbox"] label p {
-        font-size: 0.72rem !important;
+        font-size: 0.75rem !important;
+        color: #DCDFE6 !important;
         font-weight: 600 !important;
         margin-bottom: 2px !important;
     }
@@ -292,7 +299,8 @@ st.markdown(
 
     /* 구분선 및 간격 축소 */
     hr {
-        margin: 0.4rem 0 !important;
+        margin: 0.5rem 0 !important;
+        border-color: #3A3F4D !important;
     }
     </style>
 """,
@@ -410,14 +418,9 @@ for idx, yr in enumerate(past_years):
   final_ops[yr] = val_dart * 100_000_000.0
 
   with all_cols[idx]:
-    status_tag = (
-        "<span style='color:#FF5555;'>🔴</span>"
-        if val_dart < 0
-        else "<span style='color:#50FA7B;'>🟢</span>"
-    )
-    st.metric(
-        label=f"{yr}년", value=f"{val_dart:,.1f}억 {status_tag}"
-    )
+    # HTML 태그 제거 및 깔끔한 이모지 표기 (코드 노출 방지)
+    status_icon = "🔴" if val_dart < 0 else "🟢"
+    st.metric(label=f"{yr}년", value=f"{val_dart:,.1f}억 {status_icon}")
 
 # 2026년 추정치 (6번째 배치)
 with all_cols[5]:
@@ -502,7 +505,7 @@ stock_df["+2σ"] = mean_val + (std_val * 2)
 stock_df["-1σ"] = mean_val - std_val
 stock_df["-2σ"] = mean_val - (std_val * 2)
 
-# 📱 주요 지표 요약 (초밀집 4열 1행 / 모바일 유연 배치)
+# 📱 주요 지표 요약 (초밀집 4열 1행)
 st.markdown(
     "<div style='margin-top: 6px;'><b>📌 주요 지표 요약</b></div>",
     unsafe_allow_html=True,
@@ -588,15 +591,15 @@ fig.add_trace(
 )
 
 fig.update_layout(
-    paper_bgcolor="#1E1E1E",
-    plot_bgcolor="#141414",
+    paper_bgcolor="#1E222A",
+    plot_bgcolor="#14161D",
     font=dict(color="#FFFFFF", size=9),
     margin=dict(l=5, r=5, t=25, b=15),
     xaxis=dict(
-        showgrid=True, gridcolor="#2A2A2A", color="#FFFFFF", tickfont=dict(size=8)
+        showgrid=True, gridcolor="#2E3440", color="#FFFFFF", tickfont=dict(size=8)
     ),
     yaxis=dict(
-        showgrid=True, gridcolor="#2A2A2A", color="#FFFFFF", tickfont=dict(size=8)
+        showgrid=True, gridcolor="#2E3440", color="#FFFFFF", tickfont=dict(size=8)
     ),
     hovermode="x unified",
     height=380,
