@@ -18,7 +18,7 @@ st.set_page_config(page_title="POR 밴드 시뮬레이터", layout="wide")
 
 # ==========================================
 # 🔑 JSONBin & DART API 설정
-JSONBIN_BIN_ID = "4BFguH7NDFgCn3svCXBV8v".strip()
+JSONBIN_BIN_ID = "6ab0e792ac6210605ae50647".strip()
 JSONBIN_API_KEY = "mysecretkey1234".strip()
 JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
 
