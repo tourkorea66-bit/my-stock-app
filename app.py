@@ -309,13 +309,13 @@ st.markdown(
 # ==================== 🔍 메인 화면 상단 종목 검색/선택 (한 줄 배치) ====================
 
 cat_list = [
-    cat for cat, stocks in st.session_state.stock_categories.items() if stocks
+    cat for cat, stocks in st.session_state.stock_categories.items()
 ]
 if not cat_list:
     st.session_state.stock_categories["기본"] = {}
     cat_list = ["기본"]
 
-# [변경 1] 카테고리와 종목 선택을 한 줄에 나란히 표출
+# 카테고리와 종목 선택을 한 줄에 나란히 표출
 top_col1, top_col2 = st.columns([1, 1])
 
 with top_col1:
@@ -337,7 +337,7 @@ with top_col2:
 
 # 신규 종목 추가 Expander (메인 화면 상단)
 with st.expander("➕ KRX 신규 종목 검색 및 추가 / 삭제"):
-    add_col1, add_col2 = st.columns([2, 1])
+    add_col1, add_col2, add_col3 = st.columns([2, 1.5, 1])
 
     if not krx_df.empty:
         search_options = [
@@ -347,21 +347,34 @@ with st.expander("➕ KRX 신규 종목 검색 및 추가 / 삭제"):
         ]
         with add_col1:
             selected_search = st.selectbox(
-                "KRX 검색", options=["선택..."] + search_options
+                "KRX 종목 검색", options=["선택..."] + search_options
             )
 
         with add_col2:
+            # 기본 선택값으로 현재 메인에서 지정 중인 카테고리를 설정
+            default_cat_idx = (
+                cat_list.index(selected_category) if selected_category in cat_list else 0
+            )
+            target_category = st.selectbox(
+                "추가할 카테고리", options=cat_list, index=default_cat_idx
+            )
+
+        with add_col3:
             st.markdown("<div style='height:18px;'></div>", unsafe_allow_html=True)
             if st.button("추가", use_container_width=True):
                 if selected_search != "선택...":
                     s_name = selected_search.split(" (")[0]
                     s_code = selected_search.split(" (")[1].replace(")", "")
-                    st.session_state.stock_categories[selected_category][s_name] = {
+                    
+                    if target_category not in st.session_state.stock_categories:
+                        st.session_state.stock_categories[target_category] = {}
+                        
+                    st.session_state.stock_categories[target_category][s_name] = {
                         "code": s_code,
                         "op_2026": 0.0,
                     }
                     save_stocks_data(st.session_state.stock_categories)
-                    st.toast(f"'{s_name}' 추가 완료", icon="✅")
+                    st.toast(f"'{target_category}'에 '{s_name}' 추가 완료", icon="✅")
                     st.rerun()
 
     if selected_stock:
@@ -405,7 +418,7 @@ def update_2026_op(cat, stock):
 final_ops = {}
 past_years = ["2021", "2022", "2023", "2024", "2025"]
 
-# [변경 2] 21년부터 25년 영업이익 및 26년 추정치까지 6개 지표를 1줄(6컬럼)로 배치
+# 21년부터 25년 영업이익 및 26년 추정치까지 6개 지표를 1줄(6컬럼)로 배치
 st.markdown("<b>📊 영업이익 (억원)</b>", unsafe_allow_html=True)
 op_cols = st.columns(6)
 
