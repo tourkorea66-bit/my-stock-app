@@ -1,12 +1,17 @@
 import copy
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import io
 import json
+import xml.etree.ElementTree as ET
+import zipfile
+
+import FinanceDataReader as fdr
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-import FinanceDataReader as fdr
 
 # 1. 페이지 기본 설정
 st.set_page_config(
@@ -16,11 +21,13 @@ st.set_page_config(
 )
 
 # ==========================================
-# 🔑 JSONBin 설정
+# 🔑 JSONBin & DART API 설정
 JSONBIN_BIN_ID = "6ab0e792ac6210605ae50647".strip()
 JSONBIN_API_KEY = (
     "$2a$10$rD4B95ncdqx06uhoNoZx.e8D6bg7c7EKwxOHKb7siGAbfUW59G4Q6".strip()
 )
+
+DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
 # 기본 종목 목록
@@ -114,10 +121,7 @@ if "stock_categories" not in st.session_state:
 @st.cache_data(ttl=86400)
 def get_krx_stock_list():
     try:
-        df = fdr.StockListing("KRX")
-        if df is not None and not df.empty:
-            return df
-        return pd.DataFrame()
+        return fdr.StockListing("KRX")
     except Exception:
         return pd.DataFrame()
 
@@ -125,64 +129,104 @@ def get_krx_stock_list():
 krx_df = get_krx_stock_list()
 
 
-# --- 📈 NAVER 파이낸스 기반 영업이익(억원) 수집 ---
-@st.cache_data(ttl=3600)
-def fetch_operating_profit_krx(code):
-    ops = {"2021": 0.0, "2022": 0.0, "2023": 0.0, "2024": 0.0, "2025": 0.0}
-    clean_code = str(code).zfill(6)
+# --- DART 고유번호 매핑 캐싱 ---
+@st.cache_data(ttl=86400 * 30)
+def get_dart_corp_code_map(api_key):
+    corp_map = {}
+    clean_key = str(api_key).strip()
+    if not clean_key or clean_key == "YOUR_DART_API_KEY_HERE":
+        return corp_map
 
+    url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={clean_key}"
     try:
-        url = f"https://finance.naver.com/item/main.naver?code={clean_code}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        res = requests.get(url, headers=headers, timeout=5)
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+                xml_data = z.read("CORPCODE.xml")
+                root = ET.fromstring(xml_data)
+                for list_item in root.findall("list"):
+                    stock_code = list_item.findtext("stock_code", "").strip()
+                    corp_code = list_item.findtext("corp_code", "").strip()
+                    if stock_code and corp_code:
+                        corp_map[stock_code.zfill(6)] = corp_code
+    except Exception:
+        pass
+    return corp_map
 
-        if res.status_code != 200:
-            return ops
 
-        tables = pd.read_html(res.text)
-        finance_df = None
-        for tbl in tables:
-            tbl_str = tbl.to_string()
-            if "영업이익" in tbl_str:
-                finance_df = tbl
-                break
+# 단일 연도 DART API 호출
+def _fetch_single_year_dart(args):
+    b_year, clean_key, corp_code = args
+    reprt_codes = ["11011", "11014", "11012", "11013"]
 
-        if finance_df is not None:
-            if isinstance(finance_df.columns, pd.MultiIndex):
-                finance_df.columns = [
-                    c[1] if isinstance(c, tuple) else c for c in finance_df.columns
-                ]
+    for reprt_code in reprt_codes:
+        for fs_div in ["CFS", "OFS"]:
+            try:
+                url = f"https://opendart.fss.or.kr/api/fnlttSinglAcnt.json?crtfc_key={clean_key}&corp_code={corp_code}&bsns_year={b_year}&reprt_code={reprt_code}&fs_div={fs_div}"
+                res = requests.get(url, timeout=4)
+                data = res.json()
 
-            finance_df = finance_df.set_index(finance_df.columns[0])
+                if data.get("status") == "000" and "list" in data:
+                    for item in data["list"]:
+                        acc_id = str(item.get("account_id", ""))
+                        acc_nm = str(item.get("account_nm", "")).replace(" ", "").strip()
 
-            op_row = None
-            for idx in finance_df.index:
-                if "영업이익" in str(idx) and "률" not in str(idx):
-                    op_row = finance_df.loc[idx]
-                    break
+                        is_op = (
+                            "OperatingProfit" in acc_id
+                            or acc_nm
+                            in ["영업이익", "영업이익(손실)", "영업손실(이익)", "영업손실"]
+                            or (
+                                "영업이익" in acc_nm
+                                and "률" not in acc_nm
+                                and "이익률" not in acc_nm
+                            )
+                        )
 
-            if op_row is not None:
-                for col in finance_df.columns:
-                    col_str = str(col)
-                    for yr in ["2021", "2022", "2023", "2024", "2025"]:
-                        if yr in col_str and ".M" not in col_str:
-                            val_str = (
-                                str(op_row[col])
+                        if is_op:
+                            raw_val = (
+                                str(item.get("thstrm_amount", "0"))
                                 .replace(",", "")
                                 .replace(" ", "")
                                 .strip()
                             )
-                            try:
-                                ops[yr] = float(val_str)
-                            except ValueError:
-                                pass
-    except Exception:
-        pass
+
+                            if raw_val and raw_val != "-":
+                                if raw_val.startswith("(") and raw_val.endswith(")"):
+                                    raw_val = "-" + raw_val[1:-1]
+
+                                val_float = float(raw_val) / 100_000_000.0
+                                return b_year, round(val_float, 1)
+            except Exception:
+                pass
+    return b_year, 0.0
+
+
+# DART 수집
+@st.cache_data(ttl=3600)
+def fetch_operating_profit_dart(code, api_key):
+    ops = {"2021": 0.0, "2022": 0.0, "2023": 0.0, "2024": 0.0, "2025": 0.0}
+    clean_key = str(api_key).strip()
+
+    if not clean_key or clean_key == "YOUR_DART_API_KEY_HERE":
+        return ops
+
+    corp_map = get_dart_corp_code_map(clean_key)
+    corp_code = corp_map.get(str(code).zfill(6))
+    if not corp_code:
+        return ops
+
+    years = ["2021", "2022", "2023", "2024", "2025"]
+    tasks = [(yr, clean_key, corp_code) for yr in years]
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        results = executor.map(_fetch_single_year_dart, tasks)
+        for yr, val in results:
+            ops[yr] = val
 
     return ops
 
 
-# ==================== 📱초밀집 & 고대비 노란색 글자 스타일링 (CSS) ====================
+# ==================== 📱 초밀집 & 고대비 스타일링 (CSS) ====================
 st.markdown(
     """
     <style>
@@ -194,7 +238,7 @@ st.markdown(
         padding-right: 0.5rem !important;
     }
 
-    /* Metric 카드 스타일 */
+    /* Metric 카드 스타일 및 선명한 글자색 선언 */
     div[data-testid="stMetric"] {
         background-color: #1E222A !important;
         padding: 4px 6px !important;
@@ -204,41 +248,40 @@ st.markdown(
         min-height: 50px !important;
     }
     
-    /* Metric 라벨 - 노란색(#FFE600) 적용 */
+    /* Metric 라벨 (연도 및 항목 이름) - 시인성 확보 */
     div[data-testid="stMetricLabel"] p {
-        font-size: 0.72rem !important;
-        color: #FFE600 !important;
-        font-weight: 700 !important;
+        font-size: 0.68rem !important;
+        color: #DCDFE6 !important;
+        font-weight: 600 !important;
         line-height: 1.1 !important;
         margin: 0 !important;
     }
     
-    /* Metric 값 - 노란색(#FFE600) 강화 */
+    /* Metric 값 (숫자) - 선명한 흰색 및 볼드 */
     div[data-testid="stMetricValue"] div {
-        font-size: 0.88rem !important;
-        color: #FFE600 !important;
+        font-size: 0.85rem !important;
+        color: #FFFFFF !important;
         font-weight: 700 !important;
         line-height: 1.2 !important;
     }
 
-    /* 입력 폼 스타일 */
+    /* 입력 폼 선명도 최적화 */
     div[data-testid="stNumberInput"], div[data-testid="stTextInput"] {
         margin-bottom: 0px !important;
     }
     div[data-testid="stNumberInput"] label p, div[data-testid="stTextInput"] label p {
-        font-size: 0.72rem !important;
-        color: #FFE600 !important;
-        font-weight: 700 !important;
+        font-size: 0.68rem !important;
+        color: #DCDFE6 !important;
+        font-weight: 600 !important;
         margin-bottom: 2px !important;
     }
     div[data-testid="stNumberInput"] input, div[data-testid="stTextInput"] input {
         height: 1.9rem !important;
         font-size: 0.80rem !important;
-        color: #FFE600 !important;
+        color: #FFFFFF !important;
         background-color: #1E222A !important;
         border: 1px solid #3A3F4D !important;
         padding: 2px 4px !important;
-        font-weight: 700 !important;
     }
 
     /* 선택박스 컴팩트화 */
@@ -255,7 +298,7 @@ st.markdown(
         min-height: 2.2rem !important;
     }
 
-    /* 구분선 축소 */
+    /* 구분선 및 간격 축소 */
     hr {
         margin: 0.5rem 0 !important;
         border-color: #3A3F4D !important;
@@ -265,7 +308,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ==================== 🔍 메인 화면 상단 종목 검색/선택 ====================
+# ==================== 🔍 메인 화면 상단 종목 검색/선택 (한 줄 배치) ====================
 
 cat_list = [
     cat for cat, stocks in st.session_state.stock_categories.items()
@@ -274,6 +317,7 @@ if not cat_list:
     st.session_state.stock_categories["기본"] = {}
     cat_list = ["기본"]
 
+# 카테고리와 종목 선택을 한 줄에 나란히 표출
 top_col1, top_col2 = st.columns([1, 1])
 
 with top_col1:
@@ -295,6 +339,7 @@ with top_col2:
 
 # 신규 카테고리 / 종목 관리 Expander
 with st.expander("⚙️ 카테고리 및 KRX 종목 추가 / 삭제"):
+    # --- 1. 신규 카테고리 추가 영역 ---
     st.markdown("<b>📁 신규 카테고리 생성</b>", unsafe_allow_html=True)
     cat_add_col1, cat_add_col2 = st.columns([3.5, 1])
     with cat_add_col1:
@@ -319,6 +364,7 @@ with st.expander("⚙️ 카테고리 및 KRX 종목 추가 / 삭제"):
 
     st.markdown("---")
 
+    # --- 2. KRX 종목 추가 및 삭제 영역 ---
     st.markdown("<b>📈 종목 추가 및 삭제</b>", unsafe_allow_html=True)
     add_col1, add_col2, add_col3 = st.columns([2, 1.5, 1])
 
@@ -335,44 +381,35 @@ with st.expander("⚙️ 카테고리 및 KRX 종목 추가 / 삭제"):
 
         with add_col2:
             default_cat_idx = (
-                cat_list.index(selected_category)
-                if selected_category in cat_list
-                else 0
+                cat_list.index(selected_category) if selected_category in cat_list else 0
             )
             target_category = st.selectbox(
                 "추가할 카테고리", options=cat_list, index=default_cat_idx
             )
 
         with add_col3:
-            st.markdown(
-                "<div style='height:18px;'></div>", unsafe_allow_html=True
-            )
+            st.markdown("<div style='height:18px;'></div>", unsafe_allow_html=True)
             if st.button("종목 추가", use_container_width=True):
                 if selected_search != "선택...":
                     s_name = selected_search.split(" (")[0]
                     s_code = selected_search.split(" (")[1].replace(")", "")
-
+                    
                     if target_category not in st.session_state.stock_categories:
                         st.session_state.stock_categories[target_category] = {}
-
+                        
                     st.session_state.stock_categories[target_category][s_name] = {
                         "code": s_code,
                         "op_2026": 0.0,
                     }
                     save_stocks_data(st.session_state.stock_categories)
-                    st.toast(
-                        f"'{target_category}'에 '{s_name}' 추가 완료", icon="✅"
-                    )
+                    st.toast(f"'{target_category}'에 '{s_name}' 추가 완료", icon="✅")
                     st.rerun()
 
     if selected_stock:
         if st.button(
-            f"🗑️ 현재 선택 종목({selected_stock})삭제",
-            use_container_width=True,
+            f"🗑️ 현재 선택 종목({selected_stock}) 삭제", use_container_width=True
         ):
-            del st.session_state.stock_categories[selected_category][
-                selected_stock
-            ]
+            del st.session_state.stock_categories[selected_category][selected_stock]
             save_stocks_data(st.session_state.stock_categories)
             st.toast(f"'{selected_stock}' 삭제 완료", icon="🗑️")
             st.rerun()
@@ -392,11 +429,12 @@ st.markdown("---")
 
 st.markdown(f"### 📈 {selected_stock} ({stock_code})")
 
-# 과거 실적 조회
-with st.spinner("KRX/재무 데이터 조회 중..."):
-    krx_ops = fetch_operating_profit_krx(stock_code)
+# DART API를 통한 과거 실적 조회
+with st.spinner("DART 실적 조회 중..."):
+    dart_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
 
 
+# 2026 추정치 업데이트 이벤트
 def update_2026_op(cat, stock):
     widget_key = f"input_{stock}_2026"
     new_val = st.session_state[widget_key]
@@ -408,19 +446,19 @@ def update_2026_op(cat, stock):
 final_ops = {}
 past_years = ["2021", "2022", "2023", "2024", "2025"]
 
-# 실적 박스 (6컬럼)
+# 21년부터 25년 영업이익 및 26년 추정치까지 6개 지표를 1줄(6컬럼)로 배치
 st.markdown("<b>📊 영업이익 (억원)</b>", unsafe_allow_html=True)
 op_cols = st.columns(6)
 
 for idx, yr in enumerate(past_years):
-    val_op = float(krx_ops.get(yr, 0.0))
-    final_ops[yr] = val_op * 100_000_000.0
+    val_dart = float(dart_ops.get(yr, 0.0))
+    final_ops[yr] = val_dart * 100_000_000.0
 
     with op_cols[idx]:
-        status_icon = "🔴" if val_op < 0 else "🟢"
-        st.metric(label=f"{yr}년", value=f"{val_op:,.1f}억 {status_icon}")
+        status_icon = "🔴" if val_dart < 0 else "🟢"
+        st.metric(label=f"{yr}년", value=f"{val_dart:,.1f}억 {status_icon}")
 
-# 2026년 추정치 입력 박스
+# 2026년 추정치 (6번째 컬럼에 배치)
 with op_cols[5]:
     current_2026_val = float(stock_info.get("op_2026", 0.0))
     input_2026 = st.number_input(
@@ -441,15 +479,10 @@ start_date = datetime(end_date.year - 5, 1, 1)
 
 @st.cache_data(ttl=3600)
 def get_stock_data_api(code, start, end):
-    try:
-        df = fdr.DataReader(
-            code, start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")
-        )
-        if df is not None and not df.empty:
-            return df.reset_index()
-    except Exception:
-        pass
-    return pd.DataFrame()
+    df = fdr.DataReader(
+        code, start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")
+    )
+    return df.reset_index()
 
 
 try:
@@ -474,9 +507,8 @@ else:
         matched = krx_df[krx_df["Code"] == stock_code]
         if not matched.empty:
             for col_name in ["Stocks", "ListingShares", "Shares"]:
-                if (
-                    col_name in matched.columns
-                    and pd.notnull(matched[col_name].values[0])
+                if col_name in matched.columns and pd.notnull(
+                    matched[col_name].values[0]
                 ):
                     shares = float(matched[col_name].values[0])
                     if shares > 0:
@@ -509,7 +541,7 @@ stock_df["+2σ"] = mean_val + (std_val * 2)
 stock_df["-1σ"] = mean_val - std_val
 stock_df["-2σ"] = mean_val - (std_val * 2)
 
-# 📱 주요 지표 요약 박스 (글자색: 노란색)
+# 📱 주요 지표 요약 (초밀집 4열 1행)
 st.markdown(
     "<div style='margin-top: 6px;'><b>📌 주요 지표 요약</b></div>",
     unsafe_allow_html=True,
@@ -626,7 +658,7 @@ st.plotly_chart(
     },
 )
 
-# ==================== 🎯 -1σ / -2σ 하단 이탈 종목 스크리닝 ====================
+# ==================== 🎯 -1σ / -2σ 하단 이탈 종목 각각 분리 출력 ====================
 st.markdown("---")
 st.markdown("### 🎯 등록 종목 시그마(-1σ / -2σ) 이탈 스크리닝")
 
@@ -642,10 +674,10 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
                     continue
                 try:
                     df = get_stock_data_api(code, start_date, end_date)
+                    d_ops = fetch_operating_profit_dart(code, DART_API_KEY)
+
                     if df.empty:
                         continue
-
-                    k_ops = fetch_operating_profit_krx(code)
 
                     df["날짜"] = pd.to_datetime(df["Date"])
                     df["종가"] = pd.to_numeric(df["Close"], errors="coerce")
@@ -657,7 +689,7 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
                         df["시가총액"] = df["종가"] * 0
 
                     ops_dict = {
-                        yr: float(k_ops.get(yr, 0.0)) * 100_000_000.0
+                        yr: float(d_ops.get(yr, 0.0)) * 100_000_000.0
                         for yr in ["2021", "2022", "2023", "2024", "2025"]
                     }
                     ops_dict["2026"] = (
@@ -677,14 +709,15 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
 
                     m_val = v_por.mean()
                     s_val = v_por.std()
-
+                    
                     target_minus_1s = m_val - s_val
                     target_minus_2s = m_val - (s_val * 2)
 
                     cur_por = v_por.iloc[-1]
                     cur_close = df["종가"].iloc[-1]
 
-                    if cur_por <= target_minus_1s and target_minus_1s != 0:
+                    # 1. -1시그마 이하 스크리닝
+                    if cur_por <= target_minus_1s:
                         diff_1s = ((cur_por - target_minus_1s) / target_minus_1s) * 100
                         results_minus_1s.append({
                             "카테고리": cat_name,
@@ -697,7 +730,8 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
                             "괴리율": f"{diff_1s:.1f}%",
                         })
 
-                    if cur_por <= target_minus_2s and target_minus_2s != 0:
+                    # 2. -2시그마 이하 스크리닝
+                    if cur_por <= target_minus_2s:
                         diff_2s = ((cur_por - target_minus_2s) / target_minus_2s) * 100
                         results_minus_2s.append({
                             "카테고리": cat_name,
@@ -712,16 +746,13 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
                 except Exception:
                     continue
 
-    tab1, tab2 = st.tabs(
-        ["📌 -1σ 이하 (저평가 구간)", "🚨 -2σ 이하 (극단적 저평가/하향)"]
-    )
+    # 결과를 탭으로 분리하여 각각 출력
+    tab1, tab2 = st.tabs(["📌 -1σ 이하 (저평가 구간)", "🚨 -2σ 이하 (극단적 저평가/하향)"])
 
     with tab1:
         if results_minus_1s:
             df_1s = pd.DataFrame(results_minus_1s)
-            st.success(
-                f"총 {len(df_1s)}개 종목이 -1σ 하단 밴드 이하에 위치해 있습니다."
-            )
+            st.success(f"총 {len(df_1s)}개 종목이 -1σ 하단 밴드 이하에 위치해 있습니다.")
             st.dataframe(df_1s, use_container_width=True)
         else:
             st.info("현재 -1σ 이하로 이탈한 종목이 없습니다.")
@@ -729,9 +760,7 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
     with tab2:
         if results_minus_2s:
             df_2s = pd.DataFrame(results_minus_2s)
-            st.warning(
-                f"총 {len(df_2s)}개 종목이 -2σ 하단 밴드 이하에 위치해 있습니다."
-            )
+            st.warning(f"총 {len(df_2s)}개 종목이 -2σ 하단 밴드 이하에 위치해 있습니다.")
             st.dataframe(df_2s, use_container_width=True)
         else:
             st.info("현재 -2σ 이하로 이탈한 종목이 없습니다.")
