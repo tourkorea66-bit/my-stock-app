@@ -1,5 +1,5 @@
 import copy
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import io
 import json
@@ -173,8 +173,7 @@ def _fetch_single_year_dart(args):
 
                         is_op = (
                             "OperatingProfit" in acc_id
-                            or acc_nm
-                            in ["영업이익", "영업이익(손실)", "영업손실(이익)", "영업손실"]
+                            or acc_nm in ["영업이익", "영업이익(손실)", "영업손실(이익)", "영업손실"]
                             or (
                                 "영업이익" in acc_nm
                                 and "률" not in acc_nm
@@ -230,7 +229,6 @@ def fetch_operating_profit_dart(code, api_key):
 st.markdown(
     """
     <style>
-    /* 기본 여백 축소 */
     .block-container {
         padding-top: 0.8rem !important;
         padding-bottom: 1.5rem !important;
@@ -238,7 +236,6 @@ st.markdown(
         padding-right: 0.5rem !important;
     }
 
-    /* Metric 카드 스타일 및 선명한 글자색 선언 */
     div[data-testid="stMetric"] {
         background-color: #1E222A !important;
         padding: 4px 6px !important;
@@ -248,7 +245,6 @@ st.markdown(
         min-height: 50px !important;
     }
     
-    /* Metric 라벨 (연도 및 항목 이름) - 시인성 확보 */
     div[data-testid="stMetricLabel"] p {
         font-size: 0.68rem !important;
         color: #DCDFE6 !important;
@@ -257,7 +253,6 @@ st.markdown(
         margin: 0 !important;
     }
     
-    /* Metric 값 (숫자) - 선명한 흰색 및 볼드 */
     div[data-testid="stMetricValue"] div {
         font-size: 0.85rem !important;
         color: #FFFFFF !important;
@@ -265,7 +260,6 @@ st.markdown(
         line-height: 1.2 !important;
     }
 
-    /* 입력 폼 선명도 최적화 */
     div[data-testid="stNumberInput"], div[data-testid="stTextInput"] {
         margin-bottom: 0px !important;
     }
@@ -284,7 +278,6 @@ st.markdown(
         padding: 2px 4px !important;
     }
 
-    /* 선택박스 컴팩트화 */
     div[data-testid="stSelectbox"] {
         margin-bottom: 4px !important;
     }
@@ -298,7 +291,6 @@ st.markdown(
         min-height: 2.2rem !important;
     }
 
-    /* 구분선 및 간격 축소 */
     hr {
         margin: 0.5rem 0 !important;
         border-color: #3A3F4D !important;
@@ -308,7 +300,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ==================== 🔍 메인 화면 상단 종목 검색/선택 (한 줄 배치) ====================
+# ==================== 🔍 메인 화면 상단 종목 검색/선택 ====================
 
 cat_list = [
     cat for cat, stocks in st.session_state.stock_categories.items()
@@ -317,7 +309,6 @@ if not cat_list:
     st.session_state.stock_categories["기본"] = {}
     cat_list = ["기본"]
 
-# 카테고리와 종목 선택을 한 줄에 나란히 표출
 top_col1, top_col2 = st.columns([1, 1])
 
 with top_col1:
@@ -337,9 +328,7 @@ with top_col2:
         selected_stock = None
         st.info("종목 없음")
 
-# 신규 카테고리 / 종목 관리 Expander
 with st.expander("⚙️ 카테고리 및 KRX 종목 추가 / 삭제"):
-    # --- 1. 신규 카테고리 추가 영역 ---
     st.markdown("<b>📁 신규 카테고리 생성</b>", unsafe_allow_html=True)
     cat_add_col1, cat_add_col2 = st.columns([3.5, 1])
     with cat_add_col1:
@@ -364,7 +353,6 @@ with st.expander("⚙️ 카테고리 및 KRX 종목 추가 / 삭제"):
 
     st.markdown("---")
 
-    # --- 2. KRX 종목 추가 및 삭제 영역 ---
     st.markdown("<b>📈 종목 추가 및 삭제</b>", unsafe_allow_html=True)
     add_col1, add_col2, add_col3 = st.columns([2, 1.5, 1])
 
@@ -429,12 +417,10 @@ st.markdown("---")
 
 st.markdown(f"### 📈 {selected_stock} ({stock_code})")
 
-# DART API를 통한 과거 실적 조회
 with st.spinner("DART 실적 조회 중..."):
     dart_ops = fetch_operating_profit_dart(stock_code, DART_API_KEY)
 
 
-# 2026 추정치 업데이트 이벤트
 def update_2026_op(cat, stock):
     widget_key = f"input_{stock}_2026"
     new_val = st.session_state[widget_key]
@@ -446,7 +432,6 @@ def update_2026_op(cat, stock):
 final_ops = {}
 past_years = ["2021", "2022", "2023", "2024", "2025"]
 
-# 21년부터 25년 영업이익 및 26년 추정치까지 6개 지표를 1줄(6컬럼)로 배치
 st.markdown("<b>📊 영업이익 (억원)</b>", unsafe_allow_html=True)
 op_cols = st.columns(6)
 
@@ -458,7 +443,6 @@ for idx, yr in enumerate(past_years):
         status_icon = "🔴" if val_dart < 0 else "🟢"
         st.metric(label=f"{yr}년", value=f"{val_dart:,.1f}억 {status_icon}")
 
-# 2026년 추정치 (6번째 컬럼에 배치)
 with op_cols[5]:
     current_2026_val = float(stock_info.get("op_2026", 0.0))
     input_2026 = st.number_input(
@@ -522,7 +506,6 @@ stock_df["수정_영업이익"] = pd.to_numeric(
     stock_df["수정_영업이익"], errors="coerce"
 )
 
-# POR 계산
 stock_df["수정_POR"] = np.where(
     (stock_df["수정_영업이익"].notnull())
     & (stock_df["수정_영업이익"] > 0)
@@ -541,7 +524,6 @@ stock_df["+2σ"] = mean_val + (std_val * 2)
 stock_df["-1σ"] = mean_val - std_val
 stock_df["-2σ"] = mean_val - (std_val * 2)
 
-# 📱 주요 지표 요약 (초밀집 5열 1행으로 수정하여 시총 바로 옆/밑에 PER/POR 추가)
 st.markdown(
     "<div style='margin-top: 6px;'><b>📌 주요 지표 요약</b></div>",
     unsafe_allow_html=True,
@@ -555,7 +537,6 @@ latest_marcap_val = (
     else 0
 )
 
-# 현재 시점의 영업이익(또는 2026 추정 영업이익) 기반 POR/PER 계산
 latest_op = stock_df["수정_영업이익"].dropna().iloc[-1] if not stock_df["수정_영업이익"].dropna().empty else 0
 current_por_val = (latest_marcap_val / latest_op) if (latest_marcap_val > 0 and latest_op > 0) else np.nan
 
@@ -570,7 +551,7 @@ with m_cols[1]:
     )
 with m_cols[2]:
     st.metric(
-        "현재 PER(POR)",
+        "현재 POR",
         f"{current_por_val:.1f}배" if pd.notnull(current_por_val) else "N/A"
     )
 with m_cols[3]:
@@ -578,7 +559,7 @@ with m_cols[3]:
 with m_cols[4]:
     st.metric("+2σ 상단", f"{(mean_val + std_val*2):.1f}")
 
-# 📱 차트 시각화
+# 차트 시각화
 fig = go.Figure()
 fig.add_trace(
     go.Scatter(
@@ -667,7 +648,91 @@ st.plotly_chart(
     },
 )
 
-# ==================== 🎯 -1σ / -2σ 하단 이탈 종목 각각 분리 출력 ====================
+# ==================== 🎯 병렬 스크리닝 함수 및 화면 출력 ====================
+def analyze_single_stock_screening(task):
+    cat_name, s_name, s_info, start, end, dart_key = task
+    code = s_info.get("code")
+    if not code:
+        return None, None
+
+    try:
+        df = get_stock_data_api(code, start, end)
+        d_ops = fetch_operating_profit_dart(code, dart_key)
+
+        if df.empty:
+            return None, None
+
+        df["날짜"] = pd.to_datetime(df["Date"])
+        df["종가"] = pd.to_numeric(df["Close"], errors="coerce")
+        df["연도"] = df["날짜"].dt.year.astype(str)
+
+        if "Marcap" in df.columns and df["Marcap"].notnull().sum() > 0:
+            df["시가총액"] = pd.to_numeric(df["Marcap"], errors="coerce")
+        else:
+            df["시가총액"] = df["종가"] * 0
+
+        ops_dict = {
+            yr: float(d_ops.get(yr, 0.0)) * 100_000_000.0
+            for yr in ["2021", "2022", "2023", "2024", "2025"]
+        }
+        ops_dict["2026"] = (
+            float(s_info.get("op_2026", 0.0)) * 100_000_000.0
+        )
+
+        df["수정_영업이익"] = df["연도"].map(ops_dict)
+        df["수정_POR"] = np.where(
+            (df["수정_영업이익"] > 0) & (df["시가총액"] > 0),
+            df["시가총액"] / df["수정_영업이익"],
+            np.nan,
+        )
+
+        v_por = df["수정_POR"].dropna()
+        if len(v_por) < 10:
+            return None, None
+
+        m_val = v_por.mean()
+        s_val = v_por.std()
+
+        target_minus_1s = m_val - s_val
+        target_minus_2s = m_val - (s_val * 2)
+
+        cur_por = v_por.iloc[-1]
+        cur_close = df["종가"].iloc[-1]
+
+        res_1s, res_2s = None, None
+
+        if cur_por <= target_minus_1s:
+            diff_1s = ((cur_por - target_minus_1s) / target_minus_1s) * 100
+            res_1s = {
+                "카테고리": cat_name,
+                "종목명": s_name,
+                "종목코드": code,
+                "현재 종가": f"{cur_close:,.0f}원",
+                "현재 POR": f"{cur_por:.2f}",
+                "평균 POR": f"{m_val:.2f}",
+                "-1σ 밴드": f"{target_minus_1s:.2f}",
+                "괴리율": f"{diff_1s:.1f}%",
+            }
+
+        if cur_por <= target_minus_2s:
+            diff_2s = ((cur_por - target_minus_2s) / target_minus_2s) * 100
+            res_2s = {
+                "카테고리": cat_name,
+                "종목명": s_name,
+                "종목코드": code,
+                "현재 종가": f"{cur_close:,.0f}원",
+                "현재 POR": f"{cur_por:.2f}",
+                "평균 POR": f"{m_val:.2f}",
+                "-2σ 밴드": f"{target_minus_2s:.2f}",
+                "괴리율": f"{diff_2s:.1f}%",
+            }
+
+        return res_1s, res_2s
+
+    except Exception:
+        return None, None
+
+
 st.markdown("---")
 st.markdown("### 🎯 등록 종목 시그마(-1σ / -2σ) 이탈 스크리닝")
 
@@ -675,87 +740,23 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
     results_minus_1s = []
     results_minus_2s = []
 
-    with st.spinner("등록된 전체 종목의 -1σ 및 -2σ 이탈 여부를 분석 중입니다..."):
-        for cat_name, stocks in st.session_state.stock_categories.items():
-            for s_name, s_info in stocks.items():
-                code = s_info.get("code")
-                if not code:
-                    continue
-                try:
-                    df = get_stock_data_api(code, start_date, end_date)
-                    d_ops = fetch_operating_profit_dart(code, DART_API_KEY)
+    tasks = []
+    for cat_name, stocks in st.session_state.stock_categories.items():
+        for s_name, s_info in stocks.items():
+            tasks.append((cat_name, s_name, s_info, start_date, end_date, DART_API_KEY))
 
-                    if df.empty:
-                        continue
+    with st.spinner(f"등록된 {len(tasks)}개 종목을 병렬 분석 중입니다..."):
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            future_to_stock = {
+                executor.submit(analyze_single_stock_screening, t): t for t in tasks
+            }
+            for future in as_completed(future_to_stock):
+                r1, r2 = future.result()
+                if r1:
+                    results_minus_1s.append(r1)
+                if r2:
+                    results_minus_2s.append(r2)
 
-                    df["날짜"] = pd.to_datetime(df["Date"])
-                    df["종가"] = pd.to_numeric(df["Close"], errors="coerce")
-                    df["연도"] = df["날짜"].dt.year.astype(str)
-
-                    if "Marcap" in df.columns and df["Marcap"].notnull().sum() > 0:
-                        df["시가총액"] = pd.to_numeric(df["Marcap"], errors="coerce")
-                    else:
-                        df["시가총액"] = df["종가"] * 0
-
-                    ops_dict = {
-                        yr: float(d_ops.get(yr, 0.0)) * 100_000_000.0
-                        for yr in ["2021", "2022", "2023", "2024", "2025"]
-                    }
-                    ops_dict["2026"] = (
-                        float(s_info.get("op_2026", 0.0)) * 100_000_000.0
-                    )
-
-                    df["수정_영업이익"] = df["연도"].map(ops_dict)
-                    df["수정_POR"] = np.where(
-                        (df["수정_영업이익"] > 0) & (df["시가총액"] > 0),
-                        df["시가총액"] / df["수정_영업이익"],
-                        np.nan,
-                    )
-
-                    v_por = df["수정_POR"].dropna()
-                    if len(v_por) < 10:
-                        continue
-
-                    m_val = v_por.mean()
-                    s_val = v_por.std()
-                    
-                    target_minus_1s = m_val - s_val
-                    target_minus_2s = m_val - (s_val * 2)
-
-                    cur_por = v_por.iloc[-1]
-                    cur_close = df["종가"].iloc[-1]
-
-                    # 1. -1시그마 이하 스크리닝
-                    if cur_por <= target_minus_1s:
-                        diff_1s = ((cur_por - target_minus_1s) / target_minus_1s) * 100
-                        results_minus_1s.append({
-                            "카테고리": cat_name,
-                            "종목명": s_name,
-                            "종목코드": code,
-                            "현재 종가": f"{cur_close:,.0f}원",
-                            "현재 POR": f"{cur_por:.2f}",
-                            "평균 POR": f"{m_val:.2f}",
-                            "-1σ 밴드": f"{target_minus_1s:.2f}",
-                            "괴리율": f"{diff_1s:.1f}%",
-                        })
-
-                    # 2. -2시그마 이하 스크리닝
-                    if cur_por <= target_minus_2s:
-                        diff_2s = ((cur_por - target_minus_2s) / target_minus_2s) * 100
-                        results_minus_2s.append({
-                            "카테고리": cat_name,
-                            "종목명": s_name,
-                            "종목코드": code,
-                            "현재 종가": f"{cur_close:,.0f}원",
-                            "현재 POR": f"{cur_por:.2f}",
-                            "평균 POR": f"{m_val:.2f}",
-                            "-2σ 밴드": f"{target_minus_2s:.2f}",
-                            "괴리율": f"{diff_2s:.1f}%",
-                        })
-                except Exception:
-                    continue
-
-    # 결과를 탭으로 분리하여 각각 출력
     tab1, tab2 = st.tabs(["📌 -1σ 이하 (저평가 구간)", "🚨 -2σ 이하 (극단적 저평가/하향)"])
 
     with tab1:
