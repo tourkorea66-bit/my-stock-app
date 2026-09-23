@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 # ==========================================
-# 0. 기본 설정 & 파일 세팅
+# 0. 기본 설정 & 데이터 로드
 # ==========================================
 st.set_page_config(
     page_title="주가 Valuation Band & Screening Dashboard",
@@ -53,13 +53,12 @@ if "categories" not in st.session_state:
 
 
 # ==========================================
-# 1. 주가 데이터 수집 함수 (FinanceDataReader)
+# 1. 주가 데이터 수집 (FinanceDataReader)
 # ==========================================
 @st.cache_data(ttl=43200, show_spinner=False)  # 12시간 캐싱
 def get_stock_data(code: str, start_date: datetime, end_date: datetime):
-    """FinanceDataReader를 사용하여 일자별 주가 및 거래량 데이터를 안정적으로 수집합니다."""
+    """FinanceDataReader를 활용하여 일자별 주가 데이터를 수집합니다."""
     try:
-        # 코드 6자리 맞춤 (예: 059300)
         formatted_code = str(code).zfill(6)
         df = fdr.DataReader(formatted_code, start_date, end_date)
 
@@ -67,7 +66,6 @@ def get_stock_data(code: str, start_date: datetime, end_date: datetime):
             return pd.DataFrame()
 
         df = df.reset_index()
-        # 컬럼 표준화
         df.rename(columns={"Date": "Date", "Close": "Close"}, inplace=True)
         return df
     except Exception as e:
@@ -75,7 +73,7 @@ def get_stock_data(code: str, start_date: datetime, end_date: datetime):
 
 
 # ==========================================
-# 2. 개별 종목 분석 및 계산 로직 (POR 중심)
+# 2. Valuation (POR) 계산 로직
 # ==========================================
 def process_stock_valuation(code, start_date, end_date, ops_dict):
     df = get_stock_data(code, start_date, end_date)
@@ -90,11 +88,10 @@ def process_stock_valuation(code, start_date, end_date, ops_dict):
     ops_mapped = {k: float(v) for k, v in ops_dict.items() if v}
     df["영업이익_억원"] = df["연도"].map(ops_mapped)
 
-    # POR (주가 / 주당영업이익) 대용 지표
-    # 시가총액 데이터 없이 단순 주가/영업이익 추세 배수로 안전하게 산출
+    # POR (주가 / 영업이익 수치 상대 배수) 산출
     df["수정_POR"] = np.where(
         (df["영업이익_억원"].notnull()) & (df["영업이익_억원"] > 0),
-        df["Close"] / (df["영업이익_억원"] / 1000),  # 상수 스케일링 적용
+        df["Close"] / (df["영업이익_억원"] / 1000),
         np.nan,
     )
 
@@ -158,12 +155,13 @@ def analyze_single_stock_task(task):
 
 
 # ==========================================
-# 4. Streamlit UI 사이드바 & 대시보드
+# 4. Streamlit UI 대시보드
 # ==========================================
 st.title("📈 Valuation Band & Screening Dashboard")
 
 st.sidebar.header("⚙️ 분석 및 종목 관리")
 
+# 종목 추가/수정 폼
 with st.sidebar.expander("➕ 종목 추가 / 수정", expanded=False):
     cats = list(st.session_state.categories.keys())
     sel_cat = st.selectbox("카테고리 선택", cats + ["새 카테고리 추가"])
@@ -208,14 +206,14 @@ start_date = end_date - timedelta(days=365 * 5)
 tab1, tab2 = st.tabs(["📊 종목별 Valuation Band", "🔍 저평가 스크리닝 (-1σ / -2σ)"])
 
 # ------------------------------------------
-# TAB 1: 개별 종목 밴드 차트
+# TAB 1: 종목별 밴드 차트
 # ------------------------------------------
 with tab1:
     col_a, col_b = st.columns(2)
     with col_a:
         all_cats = list(st.session_state.categories.keys())
         if not all_cats:
-            st.warning("등록된 종목이 없습니다.")
+            st.warning("등록된 종목이 없습니다. 사이드바에서 추가해 주세요.")
             st.stop()
         selected_cat = st.selectbox("카테고리 선택", all_cats, key="tab1_cat")
     with col_b:
@@ -232,7 +230,7 @@ with tab1:
         except ValueError:
             ops_dict[yr] = 0.0
 
-    with st.spinner(f"'{selected_stock}' 데이터를 주가 기반으로 조회 중..."):
+    with st.spinner(f"'{selected_stock}' 데이터를 불러오는 중..."):
         df_val = process_stock_valuation(stock_code, start_date, end_date, ops_dict)
 
     if df_val.empty:
@@ -266,10 +264,10 @@ with tab1:
             fig.update_layout(title=f"{selected_stock} POR Band", xaxis_title="Date", yaxis_title="Multiple", height=500)
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.warning("밴드를 산출하기 위한 충분한 데이터가 없습니다.")
+            st.warning("밴드를 계산하기 위한 충분한 데이터가 없습니다.")
 
 # ------------------------------------------
-# TAB 2: 스크리닝
+# TAB 2: 전체 종목 스크리닝
 # ------------------------------------------
 with tab2:
     st.subheader("🔍 저평가 종목 스크리닝 (-1σ / -2σ 이하)")
@@ -302,8 +300,12 @@ with tab2:
 
         t1, t2 = st.tabs(["POR -1σ 이하 (주의 관찰)", "POR -2σ 이하 (최저점 접근)"])
         with t1:
-            if por_1s_list: st.dataframe(pd.DataFrame(por_1s_list), use_container_width=True)
-            else: st.info("조건에 해당하는 종목이 없습니다.")
+            if por_1s_list:
+                st.dataframe(pd.DataFrame(por_1s_list), use_container_width=True)
+            else:
+                st.info("조건에 해당하는 종목이 없습니다.")
         with t2:
-            if por_2s_list: st.dataframe(pd.DataFrame(por_2s_list), use_container_width=True)
-            else: st.info("조건에 해당하는 종목이 없습니다.")
+            if por_2s_list:
+                st.dataframe(pd.DataFrame(por_2s_list), use_container_width=True)
+            else:
+                st.info("조건에 해당하는 종목이 없습니다.")
