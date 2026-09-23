@@ -5,4 +5,5 @@ plotly
 openpyxl
 finance-datareader
 requests
+setuptools
 pykrx
