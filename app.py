@@ -14,7 +14,7 @@ import streamlit as st
 
 # 1. 페이지 기본 설정
 st.set_page_config(
-    page_title="POR & PER 밴드 시뮬레이터",
+    page_title="POR & PER(EPS 기반) 밴드 시뮬레이터",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -29,18 +29,18 @@ JSONBIN_API_KEY = (
 DART_API_KEY = "28b4dc2f6fac759fc70daa06cb0e9761eda3c105".strip()
 # ==========================================
 
-# 기본 종목 목록
+# 기본 종목 목록 (영업이익 추정치만 유지)
 DEFAULT_STOCKS = {
     "반도체": {
-        "SK하이닉스": {"code": "000660", "op_2026": 0.0, "np_2026": 0.0},
-        "티엘비": {"code": "356860", "op_2026": 0.0, "np_2026": 0.0},
-        "엠케이전자": {"code": "033160", "op_2026": 0.0, "np_2026": 0.0},
-        "ISC": {"code": "095340", "op_2026": 0.0, "np_2026": 0.0},
-        "엘티씨": {"code": "170920", "op_2026": 0.0, "np_2026": 0.0},
-        "하나마이크론": {"code": "067310", "op_2026": 0.0, "np_2026": 0.0},
-        "하나머티리얼즈": {"code": "166090", "op_2026": 0.0, "np_2026": 0.0},
-        "코미코": {"code": "183300", "op_2026": 0.0, "np_2026": 0.0},
-        "에프에스티": {"code": "036810", "op_2026": 0.0, "np_2026": 0.0},
+        "SK하이닉스": {"code": "000660", "op_2026": 0.0},
+        "티엘비": {"code": "356860", "op_2026": 0.0},
+        "엠케이전자": {"code": "033160", "op_2026": 0.0},
+        "ISC": {"code": "095340", "op_2026": 0.0},
+        "엘티씨": {"code": "170920", "op_2026": 0.0},
+        "하나마이크론": {"code": "067310", "op_2026": 0.0},
+        "하나머티리얼즈": {"code": "166090", "op_2026": 0.0},
+        "코미코": {"code": "183300", "op_2026": 0.0},
+        "에프에스티": {"code": "036810", "op_2026": 0.0},
     },
     "관심종목": {},
 }
@@ -139,7 +139,7 @@ def get_dart_corp_code_map(api_key):
     return corp_map
 
 
-# 단일 연도 DART API 호출 (영업이익 + 당기순이익 수집)
+# 단일 연도 DART API 호출 (영업이익 및 순이익 수집)
 def _fetch_single_year_dart_financials(args):
     b_year, clean_key, corp_code = args
     reprt_codes = ["11011", "11014", "11012", "11013"]
@@ -163,7 +163,7 @@ def _fetch_single_year_dart_financials(args):
                         acc_id = str(item.get("account_id", ""))
                         acc_nm = str(item.get("account_nm", "")).replace(" ", "").strip()
 
-                        # 영업이익 확인
+                        # 영업이익
                         if not found_op:
                             is_op = (
                                 "OperatingProfit" in acc_id
@@ -178,7 +178,7 @@ def _fetch_single_year_dart_financials(args):
                                     op_val = float(raw_val) / 100_000_000.0
                                     found_op = True
 
-                        # 당기순이익 확인
+                        # 당기순이익 (내부 PER 계산용)
                         if not found_np:
                             is_np = (
                                 "NetIncome" in acc_id
@@ -198,7 +198,6 @@ def _fetch_single_year_dart_financials(args):
     return b_year, round(op_val, 1), round(np_val, 1)
 
 
-# DART 수집 함수 (영업이익 & 순이익)
 @st.cache_data(ttl=3600)
 def fetch_financials_dart(code, api_key):
     ops = {"2021": 0.0, "2022": 0.0, "2023": 0.0, "2024": 0.0, "2025": 0.0}
@@ -225,7 +224,7 @@ def fetch_financials_dart(code, api_key):
     return ops, nps
 
 
-# ==================== 📱 초밀집 & 고대비 스타일링 (CSS) ====================
+# CSS 스타일링
 st.markdown(
     """
     <style>
@@ -300,8 +299,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ==================== 🔍 메인 화면 상단 종목 검색/선택 ====================
-
+# 상단 종목 검색 및 선택
 cat_list = [cat for cat, stocks in st.session_state.stock_categories.items()]
 if not cat_list:
     st.session_state.stock_categories["기본"] = {}
@@ -370,7 +368,6 @@ with st.expander("⚙️ 카테고리 및 KRX 종목 추가 / 삭제"):
                     st.session_state.stock_categories[target_category][s_name] = {
                         "code": s_code,
                         "op_2026": 0.0,
-                        "np_2026": 0.0,
                     }
                     save_stocks_data(st.session_state.stock_categories)
                     st.toast(f"'{target_category}'에 '{s_name}' 추가 완료", icon="✅")
@@ -400,29 +397,26 @@ with st.spinner("DART 실적 조회 중..."):
     dart_ops, dart_nps = fetch_financials_dart(stock_code, DART_API_KEY)
 
 
-def update_2026_estimates(cat, stock):
+def update_2026_op_estimate(cat, stock):
     op_key = f"input_op_{stock}_2026"
-    np_key = f"input_np_{stock}_2026"
     new_op = st.session_state[op_key]
-    new_np = st.session_state[np_key]
-    
     st.session_state.stock_categories[cat][stock]["op_2026"] = new_op
-    st.session_state.stock_categories[cat][stock]["np_2026"] = new_np
     
     if save_stocks_data(st.session_state.stock_categories):
-        st.toast(f"2026년 추정치 저장 완료 (영업이익: {new_op:,.1f}억 / 순이익: {new_np:,.1f}억)", icon="💾")
+        st.toast(f"2026년 추정 영업이익 저장 완료 ({new_op:,.1f}억원)", icon="💾")
 
 
 final_ops = {}
 final_nps = {}
 past_years = ["2021", "2022", "2023", "2024", "2025"]
 
-# 영업이익 표시
+# 영업이익 단일 표시 (당기순이익 UI는 숨김 처리)
 st.markdown("<b>📊 영업이익 (억원)</b>", unsafe_allow_html=True)
 op_cols = st.columns(6)
 for idx, yr in enumerate(past_years):
     val_op = float(dart_ops.get(yr, 0.0))
     final_ops[yr] = val_op * 100_000_000.0
+    final_nps[yr] = float(dart_nps.get(yr, 0.0)) * 100_000_000.0
     with op_cols[idx]:
         status_icon = "🔴" if val_op < 0 else "🟢"
         st.metric(label=f"{yr}년", value=f"{val_op:,.1f}억 {status_icon}")
@@ -435,35 +429,12 @@ with op_cols[5]:
         step=10.0,
         format="%.1f",
         key=f"input_op_{selected_stock}_2026",
-        on_change=update_2026_estimates,
+        on_change=update_2026_op_estimate,
         args=(selected_category, selected_stock),
     )
     final_ops["2026"] = input_2026_op * 100_000_000.0
 
-# 당기순이익 표시
-st.markdown("<b>📊 당기순이익 (억원)</b>", unsafe_allow_html=True)
-np_cols = st.columns(6)
-for idx, yr in enumerate(past_years):
-    val_np = float(dart_nps.get(yr, 0.0))
-    final_nps[yr] = val_np * 100_000_000.0
-    with np_cols[idx]:
-        status_icon = "🔴" if val_np < 0 else "🟢"
-        st.metric(label=f"{yr}년", value=f"{val_np:,.1f}억 {status_icon}")
-
-with np_cols[5]:
-    current_2026_np = float(stock_info.get("np_2026", 0.0))
-    input_2026_np = st.number_input(
-        "26년 추정 순이익",
-        value=current_2026_np,
-        step=10.0,
-        format="%.1f",
-        key=f"input_np_{selected_stock}_2026",
-        on_change=update_2026_estimates,
-        args=(selected_category, selected_stock),
-    )
-    final_nps["2026"] = input_2026_np * 100_000_000.0
-
-# ==================== 주가 데이터 수집 및 계산 ====================
+# ==================== 주가 데이터 수집 및 EPS / PER 계산 ====================
 end_date = datetime.today()
 start_date = datetime(end_date.year - 5, 1, 1)
 
@@ -488,37 +459,49 @@ stock_df["날짜"] = pd.to_datetime(stock_df["Date"])
 stock_df["종가"] = pd.to_numeric(stock_df["Close"], errors="coerce")
 stock_df["연도"] = stock_df["날짜"].dt.year.astype(str)
 
+# 발행주식수 수집
+total_shares = 0
+if not krx_df.empty and "Code" in krx_df.columns:
+    matched = krx_df[krx_df["Code"] == stock_code]
+    if not matched.empty:
+        for col_name in ["ListingShares", "Shares", "Stocks"]:
+            if col_name in matched.columns and pd.notnull(matched[col_name].values[0]):
+                total_shares = float(matched[col_name].values[0])
+                if total_shares > 0:
+                    break
+
 if "Marcap" in stock_df.columns and stock_df["Marcap"].notnull().sum() > 0:
     stock_df["시가총액"] = pd.to_numeric(stock_df["Marcap"], errors="coerce")
 else:
-    shares = 0
-    if not krx_df.empty and "Code" in krx_df.columns:
-        matched = krx_df[krx_df["Code"] == stock_code]
-        if not matched.empty:
-            for col_name in ["Stocks", "ListingShares", "Shares"]:
-                if col_name in matched.columns and pd.notnull(matched[col_name].values[0]):
-                    shares = float(matched[col_name].values[0])
-                    if shares > 0:
-                        break
-    stock_df["시가총액"] = stock_df["종가"] * shares if shares > 0 else np.nan
+    stock_df["시가총액"] = stock_df["종가"] * total_shares if total_shares > 0 else np.nan
 
-# POR / PER 계산
+# 영업이익 기반 POR 계산
 stock_df["수정_영업이익"] = pd.to_numeric(stock_df["연도"].map(final_ops), errors="coerce")
-stock_df["수정_순이익"] = pd.to_numeric(stock_df["연도"].map(final_nps), errors="coerce")
-
 stock_df["수정_POR"] = np.where(
     (stock_df["수정_영업이익"].notnull()) & (stock_df["수정_영업이익"] > 0) & (stock_df["시가총액"].notnull()),
     stock_df["시가총액"] / stock_df["수정_영업이익"],
     np.nan,
 )
 
-stock_df["수정_PER"] = np.where(
-    (stock_df["수정_순이익"].notnull()) & (stock_df["수정_순이익"] > 0) & (stock_df["시가총액"].notnull()),
-    stock_df["시가총액"] / stock_df["수정_순이익"],
-    np.nan,
-)
+# --- 💡 EPS 및 PER 산출 로직 ---
+stock_df["수정_순이익"] = pd.to_numeric(stock_df["연도"].map(final_nps), errors="coerce")
 
-# 밴드 시각화 함수
+if total_shares > 0:
+    stock_df["EPS"] = stock_df["수정_순이익"] / total_shares
+    stock_df["수정_PER"] = np.where(
+        (stock_df["EPS"].notnull()) & (stock_df["EPS"] > 0),
+        stock_df["종가"] / stock_df["EPS"],
+        np.nan,
+    )
+else:
+    stock_df["EPS"] = np.nan
+    stock_df["수정_PER"] = np.where(
+        (stock_df["수정_순이익"].notnull()) & (stock_df["수정_순이익"] > 0) & (stock_df["시가총액"].notnull()),
+        stock_df["시가총액"] / stock_df["수정_순이익"],
+        np.nan,
+    )
+
+# 밴드 차트 출력 함수
 def draw_band_chart(df, col_name, title_name):
     valid_vals = df[col_name].dropna()
     m_val = valid_vals.mean() if len(valid_vals) > 0 else 0.0
@@ -533,18 +516,21 @@ def draw_band_chart(df, col_name, title_name):
     latest_close = df["종가"].iloc[-1] if not df.empty else 0
     latest_marcap = df["시가총액"].dropna().iloc[-1] if not df["시가총액"].dropna().empty else 0
     latest_metric_val = valid_vals.iloc[-1] if len(valid_vals) > 0 else np.nan
+    latest_eps = df["EPS"].dropna().iloc[-1] if "EPS" in df and not df["EPS"].dropna().empty else np.nan
 
     st.markdown(f"<div style='margin-top: 6px;'><b>📌 {title_name} 주요 지표 요약</b></div>", unsafe_allow_html=True)
-    m_cols = st.columns(5)
+    m_cols = st.columns(6)
     with m_cols[0]:
         st.metric("종가", f"{latest_close:,.0f}원")
     with m_cols[1]:
         st.metric("시총", f"{latest_marcap / 100_000_000:,.0f}억" if latest_marcap > 0 else "N/A")
     with m_cols[2]:
-        st.metric(f"현재 {title_name}", f"{latest_metric_val:.1f}배" if pd.notnull(latest_metric_val) else "N/A")
+        st.metric("현재 EPS", f"{latest_eps:,.0f}원" if pd.notnull(latest_eps) and latest_eps > 0 else "N/A")
     with m_cols[3]:
-        st.metric(f"평균 {title_name}", f"{m_val:.1f}")
+        st.metric(f"현재 {title_name}", f"{latest_metric_val:.1f}배" if pd.notnull(latest_metric_val) else "N/A")
     with m_cols[4]:
+        st.metric(f"평균 {title_name}", f"{m_val:.1f}")
+    with m_cols[5]:
         st.metric("+2σ 상단", f"{(m_val + s_val*2):.1f}")
 
     fig = go.Figure()
@@ -570,14 +556,14 @@ def draw_band_chart(df, col_name, title_name):
 
 
 # 차트 탭 구분
-chart_tab1, chart_tab2 = st.tabs(["📉 POR 밴드 (영업이익 기반)", "📉 PER 밴드 (당기순이익 기반)"])
+chart_tab1, chart_tab2 = st.tabs(["📉 POR 밴드 (영업이익 기반)", "📉 PER 밴드 (EPS 기반)"])
 with chart_tab1:
     draw_band_chart(stock_df.copy(), "수정_POR", "POR")
 
 with chart_tab2:
     draw_band_chart(stock_df.copy(), "수정_PER", "PER")
 
-# ==================== 🎯 병렬 스크리닝 함수 및 화면 출력 ====================
+# ==================== 🎯 병렬 스크리닝 출력 ====================
 def analyze_single_stock_screening(task):
     cat_name, s_name, s_info, start, end, dart_key = task
     code = s_info.get("code")
@@ -595,25 +581,41 @@ def analyze_single_stock_screening(task):
         df["종가"] = pd.to_numeric(df["Close"], errors="coerce")
         df["연도"] = df["날짜"].dt.year.astype(str)
 
+        # 주식수 및 시가총액
+        t_shares = 0
+        if not krx_df.empty and "Code" in krx_df.columns:
+            m_row = krx_df[krx_df["Code"] == code]
+            if not m_row.empty:
+                for col in ["ListingShares", "Shares", "Stocks"]:
+                    if col in m_row.columns and pd.notnull(m_row[col].values[0]):
+                        t_shares = float(m_row[col].values[0])
+                        if t_shares > 0:
+                            break
+
         if "Marcap" in df.columns and df["Marcap"].notnull().sum() > 0:
             df["시가총액"] = pd.to_numeric(df["Marcap"], errors="coerce")
         else:
-            df["시가총액"] = df["종가"] * 0
+            df["시가총액"] = df["종가"] * t_shares if t_shares > 0 else 0
 
-        # 영업이익/순이익 맵핑
+        # 영업이익/순이익
         ops_dict = {yr: float(d_ops.get(yr, 0.0)) * 100_000_000.0 for yr in ["2021", "2022", "2023", "2024", "2025"]}
         ops_dict["2026"] = float(s_info.get("op_2026", 0.0)) * 100_000_000.0
 
         nps_dict = {yr: float(d_nps.get(yr, 0.0)) * 100_000_000.0 for yr in ["2021", "2022", "2023", "2024", "2025"]}
-        nps_dict["2026"] = float(s_info.get("np_2026", 0.0)) * 100_000_000.0
 
         df["수정_영업이익"] = df["연도"].map(ops_dict)
         df["수정_순이익"] = df["연도"].map(nps_dict)
 
         df["수정_POR"] = np.where((df["수정_영업이익"] > 0) & (df["시가총액"] > 0), df["시가총액"] / df["수정_영업이익"], np.nan)
-        df["수정_PER"] = np.where((df["수정_순이익"] > 0) & (df["시가총액"] > 0), df["시가총액"] / df["수정_순이익"], np.nan)
+        
+        if t_shares > 0:
+            df["EPS"] = df["수정_순이익"] / t_shares
+            df["수정_PER"] = np.where((df["EPS"] > 0), df["종가"] / df["EPS"], np.nan)
+        else:
+            df["수정_PER"] = np.where((df["수정_순이익"] > 0) & (df["시가총액"] > 0), df["시가총액"] / df["수정_순이익"], np.nan)
 
         cur_close = df["종가"].iloc[-1]
+        cur_eps = df["EPS"].dropna().iloc[-1] if "EPS" in df and not df["EPS"].dropna().empty else 0
 
         # POR 스크리닝
         por_1s_res, por_2s_res = None, None
@@ -632,7 +634,7 @@ def analyze_single_stock_screening(task):
                 diff = ((cur_por - t_por_2s) / t_por_2s) * 100
                 por_2s_res = {"카테고리": cat_name, "종목명": s_name, "코드": code, "종가": f"{cur_close:,.0f}원", "현재 POR": f"{cur_por:.2f}", "평균 POR": f"{m_por:.2f}", "-2σ": f"{t_por_2s:.2f}", "괴리율": f"{diff:.1f}%"}
 
-        # PER 스크리닝
+        # PER(EPS 기반) 스크리닝
         per_1s_res, per_2s_res = None, None
         v_per = df["수정_PER"].dropna()
         if len(v_per) >= 10:
@@ -644,10 +646,10 @@ def analyze_single_stock_screening(task):
 
             if cur_per <= t_per_1s:
                 diff = ((cur_per - t_per_1s) / t_per_1s) * 100
-                per_1s_res = {"카테고리": cat_name, "종목명": s_name, "코드": code, "종가": f"{cur_close:,.0f}원", "현재 PER": f"{cur_per:.2f}", "평균 PER": f"{m_per:.2f}", "-1σ": f"{t_per_1s:.2f}", "괴리율": f"{diff:.1f}%"}
+                per_1s_res = {"카테고리": cat_name, "종목명": s_name, "코드": code, "종가": f"{cur_close:,.0f}원", "EPS": f"{cur_eps:,.0f}원", "현재 PER": f"{cur_per:.2f}", "평균 PER": f"{m_per:.2f}", "-1σ": f"{t_per_1s:.2f}", "괴리율": f"{diff:.1f}%"}
             if cur_per <= t_per_2s:
                 diff = ((cur_per - t_per_2s) / t_per_2s) * 100
-                per_2s_res = {"카테고리": cat_name, "종목명": s_name, "코드": code, "종가": f"{cur_close:,.0f}원", "현재 PER": f"{cur_per:.2f}", "평균 PER": f"{m_per:.2f}", "-2σ": f"{t_per_2s:.2f}", "괴리율": f"{diff:.1f}%"}
+                per_2s_res = {"카테고리": cat_name, "종목명": s_name, "코드": code, "종가": f"{cur_close:,.0f}원", "EPS": f"{cur_eps:,.0f}원", "현재 PER": f"{cur_per:.2f}", "평균 PER": f"{m_per:.2f}", "-2σ": f"{t_per_2s:.2f}", "괴리율": f"{diff:.1f}%"}
 
         return por_1s_res, por_2s_res, per_1s_res, per_2s_res
 
