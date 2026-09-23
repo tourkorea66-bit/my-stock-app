@@ -16,7 +16,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 🔑 JSONBin 설정 (DART API Key 제거됨)
+# 🔑 JSONBin 설정
 JSONBIN_BIN_ID = "6ab0e792ac6210605ae50647".strip()
 JSONBIN_API_KEY = (
     "$2a$10$rD4B95ncdqx06uhoNoZx.e8D6bg7c7EKwxOHKb7siGAbfUW59G4Q6".strip()
@@ -122,18 +122,13 @@ def get_krx_stock_list():
 krx_df = get_krx_stock_list()
 
 
-# --- 📈 KRX / NAVER 파이낸스 기반 영업이익(억원) 수집 ---
+# --- 📈 NAVER 파이낸스 기반 영업이익(억원) 수집 ---
 @st.cache_data(ttl=3600)
 def fetch_operating_profit_krx(code):
-    """
-    FinanceDataReader 및 Naver Finance 크롤링/크롤링 대행 구조를 이용하여 
-    과거 연도별(2021~2025) 영업이익(억원)을 크롤링/조회합니다.
-    """
     ops = {"2021": 0.0, "2022": 0.0, "2023": 0.0, "2024": 0.0, "2025": 0.0}
     clean_code = str(code).zfill(6)
     
     try:
-        # 네이버 금융 재무제표 요약 테이블 수집
         url = f"https://finance.naver.com/item/main.naver?code={clean_code}"
         headers = {"User-Agent": "Mozilla/5.0"}
         res = requests.get(url, headers=headers, timeout=5)
@@ -141,20 +136,16 @@ def fetch_operating_profit_krx(code):
         tables = pd.read_html(res.text)
         finance_df = None
         for tbl in tables:
-            # 주요재무정보 테이블 탐색
             if any("영업이익" in str(col) for col in tbl.columns) or any("영업이익" in str(idx) for idx in tbl.index):
                 finance_df = tbl
                 break
 
         if finance_df is not None:
-            # MultiIndex 컬럼 정돈
             if isinstance(finance_df.columns, pd.MultiIndex):
                 finance_df.columns = [c[1] if isinstance(c, tuple) else c for c in finance_df.columns]
 
-            # 첫번째 열을 인덱스로 설정
             finance_df = finance_df.set_index(finance_df.columns[0])
             
-            # '영업이익' 행 찾기
             op_row = None
             for idx in finance_df.index:
                 if "영업이익" in str(idx) and "률" not in str(idx):
@@ -162,11 +153,10 @@ def fetch_operating_profit_krx(code):
                     break
             
             if op_row is not None:
-                # 연도별 매핑 (연간 실적 기준)
                 for col in finance_df.columns:
                     col_str = str(col)
                     for yr in ["2021", "2022", "2023", "2024", "2025"]:
-                        if yr in col_str and ".M" not in col_str:  # 분기실적 제외 (.M)
+                        if yr in col_str and ".M" not in col_str:
                             val_str = str(op_row[col]).replace(",", "").replace(" ", "").strip()
                             try:
                                 ops[yr] = float(val_str)
@@ -178,7 +168,7 @@ def fetch_operating_profit_krx(code):
     return ops
 
 
-# ==================== 📱초밀집 & 고대비 스타일링 (CSS) ====================
+# ==================== 📱초밀집 & 고대비 노란색 글자 스타일링 (CSS) ====================
 st.markdown(
     """
     <style>
@@ -190,7 +180,7 @@ st.markdown(
         padding-right: 0.5rem !important;
     }
 
-    /* Metric 카드 스타일 및 선명한 글자색 선언 */
+    /* Metric 카드 스타일 (검정 계열 배경 유지) */
     div[data-testid="stMetric"] {
         background-color: #1E222A !important;
         padding: 4px 6px !important;
@@ -200,40 +190,41 @@ st.markdown(
         min-height: 50px !important;
     }
     
-    /* Metric 라벨 (연도 및 항목 이름) - 시인성 확보 */
+    /* Metric 라벨 (연도 및 항목 이름) - 노란색(#FFE600) 적용 */
     div[data-testid="stMetricLabel"] p {
-        font-size: 0.68rem !important;
-        color: #DCDFE6 !important;
-        font-weight: 600 !important;
+        font-size: 0.72rem !important;
+        color: #FFE600 !important;
+        font-weight: 700 !important;
         line-height: 1.1 !important;
         margin: 0 !important;
     }
     
-    /* Metric 값 (숫자) - 선명한 흰색 및 볼드 */
+    /* Metric 값 (숫자 및 텍스트) - 노란색(#FFE600) 및 선명도 강화 */
     div[data-testid="stMetricValue"] div {
-        font-size: 0.85rem !important;
-        color: #FFFFFF !important;
+        font-size: 0.88rem !important;
+        color: #FFE600 !important;
         font-weight: 700 !important;
         line-height: 1.2 !important;
     }
 
-    /* 입력 폼 선명도 최적화 */
+    /* 입력 폼 스타일 */
     div[data-testid="stNumberInput"], div[data-testid="stTextInput"] {
         margin-bottom: 0px !important;
     }
     div[data-testid="stNumberInput"] label p, div[data-testid="stTextInput"] label p {
-        font-size: 0.68rem !important;
-        color: #DCDFE6 !important;
-        font-weight: 600 !important;
+        font-size: 0.72rem !important;
+        color: #FFE600 !important;
+        font-weight: 700 !important;
         margin-bottom: 2px !important;
     }
     div[data-testid="stNumberInput"] input, div[data-testid="stTextInput"] input {
         height: 1.9rem !important;
         font-size: 0.80rem !important;
-        color: #FFFFFF !important;
+        color: #FFE600 !important;
         background-color: #1E222A !important;
         border: 1px solid #3A3F4D !important;
         padding: 2px 4px !important;
+        font-weight: 700 !important;
     }
 
     /* 선택박스 컴팩트화 */
@@ -260,7 +251,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ==================== 🔍메인 화면 상단 종목 검색/선택 (한 줄 배치) ====================
+# ==================== 🔍메인 화면 상단 종목 검색/선택 ====================
 
 cat_list = [
     cat for cat, stocks in st.session_state.stock_categories.items()
@@ -269,7 +260,6 @@ if not cat_list:
     st.session_state.stock_categories["기본"] = {}
     cat_list = ["기본"]
 
-# 카테고리와 종목 선택을 한 줄에 나란히 표출
 top_col1, top_col2 = st.columns([1, 1])
 
 with top_col1:
@@ -291,7 +281,6 @@ with top_col2:
 
 # 신규 카테고리 / 종목 관리 Expander
 with st.expander("⚙️ 카테고리 및 KRX 종목 추가 / 삭제"):
-    # --- 1. 신규 카테고리 추가 영역 ---
     st.markdown("<b>📁 신규 카테고리 생성</b>", unsafe_allow_html=True)
     cat_add_col1, cat_add_col2 = st.columns([3.5, 1])
     with cat_add_col1:
@@ -316,7 +305,6 @@ with st.expander("⚙️ 카테고리 및 KRX 종목 추가 / 삭제"):
 
     st.markdown("---")
 
-    # --- 2. KRX 종목 추가 및 삭제 영역 ---
     st.markdown("<b>📈 종목 추가 및 삭제</b>", unsafe_allow_html=True)
     add_col1, add_col2, add_col3 = st.columns([2, 1.5, 1])
 
@@ -390,12 +378,11 @@ st.markdown("---")
 
 st.markdown(f"### 📈 {selected_stock} ({stock_code})")
 
-# KRX / Naver를 통한 과거 실적 조회
+# 과거 실적 조회
 with st.spinner("KRX/재무 데이터 조회 중..."):
     krx_ops = fetch_operating_profit_krx(stock_code)
 
 
-# 2026추정치 업데이트 이벤트
 def update_2026_op(cat, stock):
     widget_key = f"input_{stock}_2026"
     new_val = st.session_state[widget_key]
@@ -407,19 +394,19 @@ def update_2026_op(cat, stock):
 final_ops = {}
 past_years = ["2021", "2022", "2023", "2024", "2025"]
 
-# 21년부터 25년 영업이익 및 26년 추정치까지 6개 지표를 1줄(6컬럼)로 배치
+# 실적 박스 (6컬럼)
 st.markdown("<b>📊 영업이익 (억원)</b>", unsafe_allow_html=True)
 op_cols = st.columns(6)
 
 for idx, yr in enumerate(past_years):
     val_op = float(krx_ops.get(yr, 0.0))
-    final_ops[yr] = val_op * 100_000_000.0  # 원 단위 변환
+    final_ops[yr] = val_op * 100_000_000.0
 
     with op_cols[idx]:
         status_icon = "🔴" if val_op < 0 else "🟢"
         st.metric(label=f"{yr}년", value=f"{val_op:,.1f}억 {status_icon}")
 
-# 2026년 추정치 (6번째 컬럼에 배치)
+# 2026년 추정치 입력 박스
 with op_cols[5]:
     current_2026_val = float(stock_info.get("op_2026", 0.0))
     input_2026 = st.number_input(
@@ -503,7 +490,7 @@ stock_df["+2σ"] = mean_val + (std_val * 2)
 stock_df["-1σ"] = mean_val - std_val
 stock_df["-2σ"] = mean_val - (std_val * 2)
 
-# 📱 주요 지표 요약 (초밀집 4열 1행)
+# 📱 주요 지표 요약 박스 (글자색: 노란색)
 st.markdown(
     "<div style='margin-top: 6px;'><b>📌 주요 지표 요약</b></div>",
     unsafe_allow_html=True,
@@ -620,7 +607,7 @@ st.plotly_chart(
     },
 )
 
-# ==================== 🎯 -1σ / -2σ 하단 이탈 종목 각각 분리 출력 ====================
+# ==================== 🎯 -1σ / -2σ 하단 이탈 종목 스크리닝 ====================
 st.markdown("---")
 st.markdown("### 🎯 등록 종목 시그마(-1σ / -2σ) 이탈 스크리닝")
 
@@ -678,7 +665,6 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
                     cur_por = v_por.iloc[-1]
                     cur_close = df["종가"].iloc[-1]
 
-                    # 1. -1시그마 이하 스크리닝
                     if cur_por <= target_minus_1s:
                         diff_1s = ((cur_por - target_minus_1s) / target_minus_1s) * 100
                         results_minus_1s.append({
@@ -692,7 +678,6 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
                             "괴리율": f"{diff_1s:.1f}%",
                         })
 
-                    # 2. -2시그마 이하 스크리닝
                     if cur_por <= target_minus_2s:
                         diff_2s = ((cur_por - target_minus_2s) / target_minus_2s) * 100
                         results_minus_2s.append({
@@ -708,7 +693,6 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
                 except Exception:
                     continue
 
-    # 결과를 탭으로 분리하여 각각 출력
     tab1, tab2 = st.tabs(
         ["📌 -1σ 이하 (저평가 구간)", "🚨 -2σ 이하 (극단적 저평가/하향)"]
     )
