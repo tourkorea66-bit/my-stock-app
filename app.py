@@ -114,7 +114,10 @@ if "stock_categories" not in st.session_state:
 @st.cache_data(ttl=86400)
 def get_krx_stock_list():
     try:
-        return fdr.StockListing("KRX")
+        df = fdr.StockListing("KRX")
+        if df is not None and not df.empty:
+            return df
+        return pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
@@ -127,37 +130,48 @@ krx_df = get_krx_stock_list()
 def fetch_operating_profit_krx(code):
     ops = {"2021": 0.0, "2022": 0.0, "2023": 0.0, "2024": 0.0, "2025": 0.0}
     clean_code = str(code).zfill(6)
-    
+
     try:
         url = f"https://finance.naver.com/item/main.naver?code={clean_code}"
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         res = requests.get(url, headers=headers, timeout=5)
-        
+
+        if res.status_code != 200:
+            return ops
+
         tables = pd.read_html(res.text)
         finance_df = None
         for tbl in tables:
-            if any("영업이익" in str(col) for col in tbl.columns) or any("영업이익" in str(idx) for idx in tbl.index):
+            tbl_str = tbl.to_string()
+            if "영업이익" in tbl_str:
                 finance_df = tbl
                 break
 
         if finance_df is not None:
             if isinstance(finance_df.columns, pd.MultiIndex):
-                finance_df.columns = [c[1] if isinstance(c, tuple) else c for c in finance_df.columns]
+                finance_df.columns = [
+                    c[1] if isinstance(c, tuple) else c for c in finance_df.columns
+                ]
 
             finance_df = finance_df.set_index(finance_df.columns[0])
-            
+
             op_row = None
             for idx in finance_df.index:
                 if "영업이익" in str(idx) and "률" not in str(idx):
                     op_row = finance_df.loc[idx]
                     break
-            
+
             if op_row is not None:
                 for col in finance_df.columns:
                     col_str = str(col)
                     for yr in ["2021", "2022", "2023", "2024", "2025"]:
                         if yr in col_str and ".M" not in col_str:
-                            val_str = str(op_row[col]).replace(",", "").replace(" ", "").strip()
+                            val_str = (
+                                str(op_row[col])
+                                .replace(",", "")
+                                .replace(" ", "")
+                                .strip()
+                            )
                             try:
                                 ops[yr] = float(val_str)
                             except ValueError:
@@ -180,7 +194,7 @@ st.markdown(
         padding-right: 0.5rem !important;
     }
 
-    /* Metric 카드 스타일 (검정 계열 배경 유지) */
+    /* Metric 카드 스타일 */
     div[data-testid="stMetric"] {
         background-color: #1E222A !important;
         padding: 4px 6px !important;
@@ -190,7 +204,7 @@ st.markdown(
         min-height: 50px !important;
     }
     
-    /* Metric 라벨 (연도 및 항목 이름) - 노란색(#FFE600) 적용 */
+    /* Metric 라벨 - 노란색(#FFE600) 적용 */
     div[data-testid="stMetricLabel"] p {
         font-size: 0.72rem !important;
         color: #FFE600 !important;
@@ -199,7 +213,7 @@ st.markdown(
         margin: 0 !important;
     }
     
-    /* Metric 값 (숫자 및 텍스트) - 노란색(#FFE600) 및 선명도 강화 */
+    /* Metric 값 - 노란색(#FFE600) 강화 */
     div[data-testid="stMetricValue"] div {
         font-size: 0.88rem !important;
         color: #FFE600 !important;
@@ -241,7 +255,7 @@ st.markdown(
         min-height: 2.2rem !important;
     }
 
-    /* 구분선 및 간격 축소 */
+    /* 구분선 축소 */
     hr {
         margin: 0.5rem 0 !important;
         border-color: #3A3F4D !important;
@@ -251,7 +265,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ==================== 🔍메인 화면 상단 종목 검색/선택 ====================
+# ==================== 🔍 메인 화면 상단 종목 검색/선택 ====================
 
 cat_list = [
     cat for cat, stocks in st.session_state.stock_categories.items()
@@ -427,10 +441,15 @@ start_date = datetime(end_date.year - 5, 1, 1)
 
 @st.cache_data(ttl=3600)
 def get_stock_data_api(code, start, end):
-    df = fdr.DataReader(
-        code, start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")
-    )
-    return df.reset_index()
+    try:
+        df = fdr.DataReader(
+            code, start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")
+        )
+        if df is not None and not df.empty:
+            return df.reset_index()
+    except Exception:
+        pass
+    return pd.DataFrame()
 
 
 try:
@@ -623,10 +642,10 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
                     continue
                 try:
                     df = get_stock_data_api(code, start_date, end_date)
-                    k_ops = fetch_operating_profit_krx(code)
-
                     if df.empty:
                         continue
+
+                    k_ops = fetch_operating_profit_krx(code)
 
                     df["날짜"] = pd.to_datetime(df["Date"])
                     df["종가"] = pd.to_numeric(df["Close"], errors="coerce")
@@ -665,7 +684,7 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
                     cur_por = v_por.iloc[-1]
                     cur_close = df["종가"].iloc[-1]
 
-                    if cur_por <= target_minus_1s:
+                    if cur_por <= target_minus_1s and target_minus_1s != 0:
                         diff_1s = ((cur_por - target_minus_1s) / target_minus_1s) * 100
                         results_minus_1s.append({
                             "카테고리": cat_name,
@@ -678,7 +697,7 @@ if st.button("🔍 전체 종목 시그마 스크리닝 실행", use_container_w
                             "괴리율": f"{diff_1s:.1f}%",
                         })
 
-                    if cur_por <= target_minus_2s:
+                    if cur_por <= target_minus_2s and target_minus_2s != 0:
                         diff_2s = ((cur_por - target_minus_2s) / target_minus_2s) * 100
                         results_minus_2s.append({
                             "카테고리": cat_name,
