@@ -139,10 +139,11 @@ def get_dart_corp_code_map(api_key):
     return corp_map
 
 
-# 단일 연도 DART API 호출 (영업이익 및 순이익 수집)
+# 단일 연도 DART API 호출 (최신 보고서 탐색: 3분기 -> 반기 -> 1분기 -> 사업보고서 순)
 def _fetch_single_year_dart_financials(args):
     b_year, clean_key, corp_code = args
-    reprt_codes = ["11011", "11014", "11012", "11013"]
+    # 최신 분기 보고서를 우선 탐색
+    reprt_codes = ["11014", "11012", "11013", "11011"]
 
     op_val, np_val = 0.0, 0.0
     found_op, found_np = False, False
@@ -163,7 +164,7 @@ def _fetch_single_year_dart_financials(args):
                         acc_id = str(item.get("account_id", ""))
                         acc_nm = str(item.get("account_nm", "")).replace(" ", "").strip()
 
-                        # 영업이익
+                        # 영업이익 추출
                         if not found_op:
                             is_op = (
                                 "OperatingProfit" in acc_id
@@ -178,7 +179,7 @@ def _fetch_single_year_dart_financials(args):
                                     op_val = float(raw_val) / 100_000_000.0
                                     found_op = True
 
-                        # 당기순이익 (내부 PER 계산용)
+                        # 당기순이익 추출 (내부 PER 계산용)
                         if not found_np:
                             is_np = (
                                 "NetIncome" in acc_id
