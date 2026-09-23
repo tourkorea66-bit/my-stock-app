@@ -3,4 +3,6 @@ pandas
 numpy
 plotly
 requests
-FinanceDataReader
+finance-datareader
+lxml
+html5lib
