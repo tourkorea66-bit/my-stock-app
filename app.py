@@ -541,12 +541,12 @@ stock_df["+2σ"] = mean_val + (std_val * 2)
 stock_df["-1σ"] = mean_val - std_val
 stock_df["-2σ"] = mean_val - (std_val * 2)
 
-# 📱 주요 지표 요약 (초밀집 4열 1행)
+# 📱 주요 지표 요약 (초밀집 5열 1행으로 수정하여 시총 바로 옆/밑에 PER/POR 추가)
 st.markdown(
     "<div style='margin-top: 6px;'><b>📌 주요 지표 요약</b></div>",
     unsafe_allow_html=True,
 )
-m_cols = st.columns(4)
+m_cols = st.columns(5)
 
 latest_close = stock_df["종가"].iloc[-1] if not stock_df.empty else 0
 latest_marcap_val = (
@@ -554,6 +554,10 @@ latest_marcap_val = (
     if not stock_df["시가총액"].dropna().empty
     else 0
 )
+
+# 현재 시점의 영업이익(또는 2026 추정 영업이익) 기반 POR/PER 계산
+latest_op = stock_df["수정_영업이익"].dropna().iloc[-1] if not stock_df["수정_영업이익"].dropna().empty else 0
+current_por_val = (latest_marcap_val / latest_op) if (latest_marcap_val > 0 and latest_op > 0) else np.nan
 
 with m_cols[0]:
     st.metric("종가", f"{latest_close:,.0f}원")
@@ -565,8 +569,13 @@ with m_cols[1]:
         else "N/A",
     )
 with m_cols[2]:
-    st.metric("평균POR", f"{mean_val:.1f}")
+    st.metric(
+        "현재 PER(POR)",
+        f"{current_por_val:.1f}배" if pd.notnull(current_por_val) else "N/A"
+    )
 with m_cols[3]:
+    st.metric("평균POR", f"{mean_val:.1f}")
+with m_cols[4]:
     st.metric("+2σ 상단", f"{(mean_val + std_val*2):.1f}")
 
 # 📱 차트 시각화
